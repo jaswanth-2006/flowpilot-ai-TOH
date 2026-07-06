@@ -50,6 +50,16 @@ class BusinessMemoryItem(BaseModel):
     influence: str
 
 
+class FinalRecommendation(BaseModel):
+    supplier: str
+    products: list[str] = Field(default_factory=list)
+    estimated_quote: str
+    expected_margin: str
+    delivery_timeline: str
+    approval_required: str
+    business_reasoning: str
+
+
 class WorkflowStep(BaseModel):
     id: str
     title: str
@@ -83,8 +93,23 @@ class ExecutionPlanContent(BaseModel):
     workflow_steps: list[WorkflowStep] = Field(default_factory=list)
     risk_analysis: list[RiskAnalysisItem] = Field(default_factory=list)
     approval_requirement: str
+    approval_status: str = "pending"
+    final_recommendation: FinalRecommendation | None = None
     business_memory: list[BusinessMemoryItem] = Field(default_factory=list)
     execution_history: list[ExecutionSnapshot] = Field(default_factory=list)
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected", "changes_requested"]
+    note: str | None = None
+
+
+class RecommendationUpdateRequest(BaseModel):
+    supplier: str | None = None
+    products: list[str] | None = None
+    expected_margin: str | None = None
+    delivery_timeline: str | None = None
+    estimated_quote: str | None = None
 
 
 class ExecutionPlanRecord(BaseModel):

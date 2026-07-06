@@ -30,9 +30,18 @@ body {
         linear-gradient(180deg, #f8fafc 0%, #f5f7fb 38%, #eef2f7 100%);
     background-attachment: fixed;
     color: #0f172a;
+    line-height: 1.6;
+    letter-spacing: 0.01em;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+textarea,
+select {
+    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
 }
 
 ::selection {

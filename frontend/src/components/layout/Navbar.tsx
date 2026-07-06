@@ -6,7 +6,8 @@ const TITLES: Record<string, string> = {
   "/customers": "Customers",
   "/products": "Products",
   "/suppliers": "Suppliers",
-  "/execution-engine": "AI Execution Engine",
+  "/ai-operations-center": "AI Operations Center",
+  "/execution-engine": "AI Operations Center",
 };
 
 export default function Navbar() {
@@ -30,7 +31,7 @@ export default function Navbar() {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            className="hidden h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 text-sm text-slate-500 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 md:flex"
+            className="hidden h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 text-sm text-slate-500 shadow-sm transition-all duration-200 ease-out hover:border-slate-300 hover:bg-slate-50 md:flex"
           >
             <Search className="h-4 w-4" />
             Search

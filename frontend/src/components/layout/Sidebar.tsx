@@ -30,8 +30,8 @@ export default function Sidebar() {
   const navigate = useNavigate();
 
   return (
-    <aside className="sticky top-0 flex h-screen w-80 flex-col border-r border-slate-800/70 bg-slate-950/95 p-5 text-white shadow-[20px_0_80px_-40px_rgba(15,23,42,0.9)] backdrop-blur-xl">
-      <div className="rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-inner shadow-white/5">
+    <aside className="sticky top-0 z-20 flex min-h-screen w-full max-w-[280px] flex-col border-r border-slate-800/70 bg-slate-950/95 p-5 text-white shadow-[20px_0_80px_-40px_rgba(15,23,42,0.9)] backdrop-blur-xl lg:w-[280px]">
+      <div className="rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-inner shadow-white/5 transition-all duration-200 ease-out hover:shadow-[0_10px_30px_-20px_rgba(255,255,255,0.25)]">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-400 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-500/20">
             FP
@@ -52,13 +52,12 @@ export default function Sidebar() {
           <div
             key={item.label}
             onClick={item.to ? () => navigate(item.to) : undefined}
-            className={`group flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200 ${
-              item.to
+            className={`group flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200 ${item.to
                 ? location.pathname === item.to
                   ? "cursor-pointer bg-white/12 text-white shadow-sm ring-1 ring-white/10"
                   : "cursor-pointer text-slate-300 hover:bg-white/8 hover:text-white"
                 : "cursor-default text-slate-500"
-            }`}
+              }`}
           >
             <item.icon size={18} className={location.pathname === item.to ? "text-cyan-300" : "text-slate-400 group-hover:text-cyan-300"} />
 

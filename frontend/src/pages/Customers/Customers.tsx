@@ -10,6 +10,8 @@ import {
   X,
 } from "lucide-react";
 
+import Sidebar from "../../components/layout/Sidebar";
+import Navbar from "../../components/layout/Navbar";
 import { Button } from "../../components/ui/button";
 import {
   createCustomer,
@@ -52,6 +54,30 @@ function formatCustomerId(customer: Customer) {
   }
 
   return customer.company_id || "N/A";
+}
+
+function validateCustomerForm(form: CustomerInput) {
+  if (!form.company_id.trim()) {
+    return "Company ID is required.";
+  }
+
+  if (!form.name.trim()) {
+    return "Customer name is required.";
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+    return "Please enter a valid email address.";
+  }
+
+  if (!form.phone.trim()) {
+    return "Phone number is required.";
+  }
+
+  if (!form.address.trim()) {
+    return "Address is required.";
+  }
+
+  return null;
 }
 
 export default function Customers() {
@@ -123,6 +149,7 @@ export default function Customers() {
     setDialogMode("create");
     setSelectedCustomer(null);
     setForm(emptyForm);
+    setError(null);
     setDialogOpen(true);
   }
 
@@ -137,6 +164,7 @@ export default function Customers() {
       address: customer.address ?? "",
       notes: customer.notes ?? "",
     });
+    setError(null);
     setDialogOpen(true);
   }
 
@@ -158,13 +186,20 @@ export default function Customers() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    const validationError = validateCustomerForm(form);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     try {
       setSubmitting(true);
+      setError(null);
 
       if (dialogMode === "edit" && selectedCustomer?.id) {
-        await updateCustomer(selectedCustomer.id, form);
+        await updateCustomer(selectedCustomer.id, { ...form, email: form.email.trim(), phone: form.phone.trim() });
       } else {
-        await createCustomer(form);
+        await createCustomer({ ...form, email: form.email.trim(), phone: form.phone.trim() });
       }
 
       await refreshCustomers();
@@ -195,187 +230,190 @@ export default function Customers() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f7fb] text-slate-900">
-      <div className="mx-auto max-w-7xl px-6 py-8 lg:px-10">
-        <div className="mb-8 flex flex-col gap-4 rounded-[32px] border border-slate-200/80 bg-white/85 px-6 py-5 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-sm font-medium uppercase tracking-[0.24em] text-blue-600">
-              Customer Module
-            </p>
-            <h1 className="mt-1 text-3xl font-semibold text-slate-950">
-              Customers
-            </h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Manage customer records, contact details, and company references.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="relative min-w-72 flex-1 sm:flex-none">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search customers"
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm outline-none transition focus:border-blue-500 focus:bg-white"
-              />
-            </div>
-
-            <Button onClick={openCreateDialog} className="h-11 rounded-2xl px-4">
-              <Plus className="mr-2 h-4 w-4" />
-              New Customer
-            </Button>
-          </div>
-        </div>
-
-        {error ? (
-          <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/90 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl">
-          <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+    <div className="flex min-h-screen bg-[#f5f7fb] text-slate-900">
+      <Sidebar />
+      <div className="flex-1 flex flex-col">
+        <Navbar />
+        <main className="flex-1 mx-auto w-full max-w-7xl px-6 py-8 lg:px-10">
+          <div className="mb-8 flex flex-col gap-4 rounded-[32px] border border-slate-200/80 bg-white/85 px-6 py-5 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 ease-out hover:-translate-y-0.5 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-950">Customer Directory</h2>
-              <p className="text-sm text-slate-500">
-                {loading ? "Loading customers..." : `${totalCount} customer${totalCount === 1 ? "" : "s"} found`}
+              <p className="text-sm font-medium uppercase tracking-[0.24em] text-blue-600">
+                Customer Module
+              </p>
+              <h1 className="mt-1 text-3xl font-semibold text-slate-950">
+                Customers
+              </h1>
+              <p className="mt-2 text-sm text-slate-500">
+                Manage customer records, contact details, and company references.
               </p>
             </div>
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
-              Page {safePage} of {totalPages}
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="relative min-w-72 flex-1 sm:flex-none">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search customers"
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm outline-none transition-all duration-200 ease-out focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+
+              <Button onClick={openCreateDialog} className="h-11 rounded-2xl px-4">
+                <Plus className="mr-2 h-4 w-4" />
+                New Customer
+              </Button>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-100">
-              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                <tr>
-                  <th className="px-6 py-4">Customer</th>
-                  <th className="px-6 py-4">Company</th>
-                  <th className="px-6 py-4">Contact</th>
-                  <th className="px-6 py-4">Address</th>
-                  <th className="px-6 py-4">Notes</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
-                </tr>
-              </thead>
+          {error ? (
+            <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          ) : null}
 
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {loading ? (
-                  Array.from({ length: PAGE_SIZE }).map((_, index) => (
-                    <tr key={index} className="animate-pulse">
-                      <td className="px-6 py-5">
-                        <div className="h-4 w-40 rounded bg-slate-200" />
-                        <div className="mt-2 h-3 w-24 rounded bg-slate-100" />
-                      </td>
-                      <td className="px-6 py-5"><div className="h-4 w-28 rounded bg-slate-200" /></td>
-                      <td className="px-6 py-5"><div className="h-4 w-36 rounded bg-slate-200" /></td>
-                      <td className="px-6 py-5"><div className="h-4 w-44 rounded bg-slate-200" /></td>
-                      <td className="px-6 py-5"><div className="h-4 w-32 rounded bg-slate-200" /></td>
-                      <td className="px-6 py-5 text-right"><div className="ml-auto h-4 w-24 rounded bg-slate-200" /></td>
-                    </tr>
-                  ))
-                ) : pageCustomers.length > 0 ? (
-                  pageCustomers.map((customer) => (
-                    <tr key={customer.id ?? `${customer.company_id}-${customer.email}`} className="transition hover:bg-slate-50/80">
-                      <td className="px-6 py-5 align-top">
-                        <div className="font-semibold text-slate-950">{customer.name}</div>
-                        <div className="mt-1 text-sm text-slate-500">ID: {formatCustomerId(customer)}</div>
-                      </td>
-                      <td className="px-6 py-5 align-top text-sm text-slate-700">{customer.company_id}</td>
-                      <td className="px-6 py-5 align-top">
-                        <div className="text-sm font-medium text-slate-700">{customer.email}</div>
-                        <div className="text-sm text-slate-500">{customer.phone}</div>
-                      </td>
-                      <td className="px-6 py-5 align-top text-sm text-slate-700">{customer.address}</td>
-                      <td className="px-6 py-5 align-top text-sm text-slate-500">
-                        <div className="max-w-xs truncate">{customer.notes || "-"}</div>
-                      </td>
-                      <td className="px-6 py-5 align-top text-right">
-                        <div className="inline-flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openEditDialog(customer)}
-                            className="rounded-xl"
-                          >
-                            <PencilLine className="mr-2 h-3.5 w-3.5" />
-                            Edit
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => setDeleteTarget(customer)}
-                            className="rounded-xl"
-                          >
-                            <Trash2 className="mr-2 h-3.5 w-3.5" />
-                            Delete
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
+          <div className="overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/90 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl">
+            <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">Customer Directory</h2>
+                <p className="text-sm text-slate-500">
+                  {loading ? "Loading customers..." : `${totalCount} customer${totalCount === 1 ? "" : "s"} found`}
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
+                Page {safePage} of {totalPages}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-100">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                   <tr>
-                    <td colSpan={6} className="px-6 py-16 text-center">
-                      <div className="mx-auto max-w-md">
-                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                          <Search className="h-6 w-6" />
-                        </div>
-                        <h3 className="mt-5 text-xl font-semibold text-slate-950">
-                          {search ? "No matching customers" : "No customers yet"}
-                        </h3>
-                        <p className="mt-2 text-sm leading-6 text-slate-500">
-                          {search
-                            ? "Try another search term or clear the filters to view the full list."
-                            : "Create the first customer record to start building the directory."}
-                        </p>
-                        {!search ? (
-                          <Button onClick={openCreateDialog} className="mt-6 rounded-2xl px-5">
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add Customer
-                          </Button>
-                        ) : null}
-                      </div>
-                    </td>
+                    <th className="px-6 py-4">Customer</th>
+                    <th className="px-6 py-4">Company</th>
+                    <th className="px-6 py-4">Contact</th>
+                    <th className="px-6 py-4">Address</th>
+                    <th className="px-6 py-4">Notes</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
 
-          <div className="flex flex-col gap-4 border-t border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-slate-500">
-              Showing {pageCustomers.length} of {totalCount} customer{totalCount === 1 ? "" : "s"}
-            </p>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {loading ? (
+                    Array.from({ length: PAGE_SIZE }).map((_, index) => (
+                      <tr key={index} className="animate-pulse">
+                        <td className="px-6 py-5">
+                          <div className="h-4 w-40 rounded bg-slate-200" />
+                          <div className="mt-2 h-3 w-24 rounded bg-slate-100" />
+                        </td>
+                        <td className="px-6 py-5"><div className="h-4 w-28 rounded bg-slate-200" /></td>
+                        <td className="px-6 py-5"><div className="h-4 w-36 rounded bg-slate-200" /></td>
+                        <td className="px-6 py-5"><div className="h-4 w-44 rounded bg-slate-200" /></td>
+                        <td className="px-6 py-5"><div className="h-4 w-32 rounded bg-slate-200" /></td>
+                        <td className="px-6 py-5 text-right"><div className="ml-auto h-4 w-24 rounded bg-slate-200" /></td>
+                      </tr>
+                    ))
+                  ) : pageCustomers.length > 0 ? (
+                    pageCustomers.map((customer) => (
+                      <tr key={customer.id ?? `${customer.company_id}-${customer.email}`} className="transition hover:bg-slate-50/80">
+                        <td className="px-6 py-5 align-top">
+                          <div className="font-semibold text-slate-950">{customer.name}</div>
+                          <div className="mt-1 text-sm text-slate-500">ID: {formatCustomerId(customer)}</div>
+                        </td>
+                        <td className="px-6 py-5 align-top text-sm text-slate-700">{customer.company_id}</td>
+                        <td className="px-6 py-5 align-top">
+                          <div className="text-sm font-medium text-slate-700">{customer.email}</div>
+                          <div className="text-sm text-slate-500">{customer.phone}</div>
+                        </td>
+                        <td className="px-6 py-5 align-top text-sm text-slate-700">{customer.address}</td>
+                        <td className="px-6 py-5 align-top text-sm text-slate-500">
+                          <div className="max-w-xs truncate">{customer.notes || "-"}</div>
+                        </td>
+                        <td className="px-6 py-5 align-top text-right">
+                          <div className="inline-flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openEditDialog(customer)}
+                              className="rounded-xl"
+                            >
+                              <PencilLine className="mr-2 h-3.5 w-3.5" />
+                              Edit
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => setDeleteTarget(customer)}
+                              className="rounded-xl"
+                            >
+                              <Trash2 className="mr-2 h-3.5 w-3.5" />
+                              Delete
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-16 text-center">
+                        <div className="mx-auto max-w-md">
+                          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                            <Search className="h-6 w-6" />
+                          </div>
+                          <h3 className="mt-5 text-xl font-semibold text-slate-950">
+                            {search ? "No matching customers" : "No customers yet"}
+                          </h3>
+                          <p className="mt-2 text-sm leading-6 text-slate-500">
+                            {search
+                              ? "Try another search term or clear the filters to view the full list."
+                              : "Create the first customer record to start building the directory."}
+                          </p>
+                          {!search ? (
+                            <Button onClick={openCreateDialog} className="mt-6 rounded-2xl px-5">
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add Customer
+                            </Button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
 
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                disabled={safePage === 1}
-                className="rounded-xl"
-              >
-                <ChevronLeft className="mr-2 h-4 w-4" />
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                disabled={safePage === totalPages}
-                className="rounded-xl"
-              >
-                Next
-                <ChevronRight className="ml-2 h-4 w-4" />
-              </Button>
+            <div className="flex flex-col gap-4 border-t border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-slate-500">
+                Showing {pageCustomers.length} of {totalCount} customer{totalCount === 1 ? "" : "s"}
+              </p>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  disabled={safePage === 1}
+                  className="rounded-xl"
+                >
+                  <ChevronLeft className="mr-2 h-4 w-4" />
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                  disabled={safePage === totalPages}
+                  className="rounded-xl"
+                >
+                  Next
+                  <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
       </div>
 
       {dialogOpen ? (

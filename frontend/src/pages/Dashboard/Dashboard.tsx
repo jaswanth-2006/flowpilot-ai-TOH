@@ -11,7 +11,7 @@ export default function Dashboard() {
 
         <main className="flex-1 px-6 py-8 lg:px-8">
           <div className="mb-8 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="rounded-[32px] border border-slate-200/80 bg-white/85 p-6 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl">
+            <div className="rounded-[32px] border border-slate-200/80 bg-white/85 p-6 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-xl">
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-600">Overview</p>
               <h3 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
                 Operations at a glance.
@@ -21,7 +21,7 @@ export default function Dashboard() {
               </p>
             </div>
 
-            <div className="rounded-[32px] border border-slate-200/80 bg-gradient-to-br from-slate-950 to-blue-950 p-6 text-white shadow-[0_24px_80px_-44px_rgba(15,23,42,0.5)]">
+            <div className="rounded-[32px] border border-slate-200/80 bg-gradient-to-br from-slate-950 to-blue-950 p-6 text-white shadow-[0_24px_80px_-44px_rgba(15,23,42,0.5)] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-2xl">
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-200">System Health</p>
               <div className="mt-3 flex items-end justify-between gap-4">
                 <div>
@@ -37,7 +37,7 @@ export default function Dashboard() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-[28px] border border-slate-200/80 bg-white/85 p-6 shadow-[0_18px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur-xl">
+            <div className="rounded-[28px] border border-slate-200/80 bg-white/85 p-6 shadow-[0_18px_60px_-40px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-xl">
               <h2 className="text-sm font-medium text-slate-500">Today's Leads</h2>
               <h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-950">24</h1>
               <div className="mt-4 h-1.5 rounded-full bg-slate-100">

@@ -11,6 +11,8 @@ import {
   X,
 } from "lucide-react";
 
+import Sidebar from "../../components/layout/Sidebar";
+import Navbar from "../../components/layout/Navbar";
 import { Button } from "../../components/ui/button";
 import {
   createProduct,
@@ -73,6 +75,34 @@ function stockLabel(inventory: number) {
   }
 
   return { text: "In Stock", className: "bg-emerald-50 text-emerald-700" };
+}
+
+function validateProductForm(form: ProductInput) {
+  if (!form.supplier_id) {
+    return "Please select a supplier.";
+  }
+
+  if (!form.name.trim()) {
+    return "Product name is required.";
+  }
+
+  if (!form.sku.trim()) {
+    return "SKU is required.";
+  }
+
+  if (!form.category.trim()) {
+    return "Category is required.";
+  }
+
+  if (!Number.isFinite(form.price) || form.price < 0) {
+    return "Price must be zero or greater.";
+  }
+
+  if (!Number.isFinite(form.inventory) || form.inventory < 0) {
+    return "Inventory must be zero or greater.";
+  }
+
+  return null;
 }
 
 export default function Products() {
@@ -170,6 +200,7 @@ export default function Products() {
     setDialogMode("create");
     setSelectedProduct(null);
     setForm(emptyForm);
+    setError(null);
     setDialogOpen(true);
   }
 
@@ -185,6 +216,7 @@ export default function Products() {
       inventory: Number(product.inventory ?? 0),
       description: product.description ?? "",
     });
+    setError(null);
     setDialogOpen(true);
   }
 
@@ -206,13 +238,20 @@ export default function Products() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    const validationError = validateProductForm(form);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     try {
       setSubmitting(true);
+      setError(null);
 
       if (dialogMode === "edit" && selectedProduct?.id) {
-        await updateProduct(selectedProduct.id, form);
+        await updateProduct(selectedProduct.id, { ...form, name: form.name.trim(), sku: form.sku.trim(), category: form.category.trim(), description: form.description.trim() });
       } else {
-        await createProduct(form);
+        await createProduct({ ...form, name: form.name.trim(), sku: form.sku.trim(), category: form.category.trim(), description: form.description.trim() });
       }
 
       await refreshProducts();
@@ -243,167 +282,170 @@ export default function Products() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f7fb] text-slate-900">
-      <div className="mx-auto max-w-7xl px-6 py-8 lg:px-10">
-        <div className="mb-8 flex flex-col gap-4 rounded-[32px] border border-slate-200/80 bg-white/85 px-6 py-5 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-sm font-medium uppercase tracking-[0.24em] text-blue-600">Inventory Module</p>
-            <h1 className="mt-1 text-3xl font-semibold text-slate-950">Products</h1>
-            <p className="mt-2 text-sm text-slate-500">
-              Track product records, supplier mapping, and inventory levels in one place.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="relative min-w-72 flex-1 sm:flex-none">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Search products"
-                className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm outline-none transition focus:border-blue-500 focus:bg-white"
-              />
-            </div>
-
-            <Button onClick={openCreateDialog} className="h-11 rounded-2xl px-4">
-              <Plus className="mr-2 h-4 w-4" />
-              New Product
-            </Button>
-          </div>
-        </div>
-
-        {error ? (
-          <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
-        ) : null}
-
-        <div className="overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/90 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl">
-          <div className="flex flex-col gap-2 border-b border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex min-h-screen bg-[#f5f7fb] text-slate-900">
+      <Sidebar />
+      <div className="flex-1 flex flex-col">
+        <Navbar />
+        <main className="flex-1 mx-auto w-full max-w-7xl px-6 py-8 lg:px-10">
+          <div className="mb-8 flex flex-col gap-4 rounded-[32px] border border-slate-200/80 bg-white/85 px-6 py-5 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 ease-out hover:-translate-y-0.5 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-950">Product Directory</h2>
-              <p className="text-sm text-slate-500">
-                {loading ? "Loading products..." : `${totalCount} product${totalCount === 1 ? "" : "s"} found`}
+              <p className="text-sm font-medium uppercase tracking-[0.24em] text-blue-600">Inventory Module</p>
+              <h1 className="mt-1 text-3xl font-semibold text-slate-950">Products</h1>
+              <p className="mt-2 text-sm text-slate-500">
+                Track product records, supplier mapping, and inventory levels in one place.
               </p>
             </div>
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
-              Page {safePage} of {totalPages}
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="relative min-w-72 flex-1 sm:flex-none">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search products"
+                  className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm outline-none transition focus:border-blue-500 focus:bg-white"
+                />
+              </div>
+
+              <Button onClick={openCreateDialog} className="h-11 rounded-2xl px-4">
+                <Plus className="mr-2 h-4 w-4" />
+                New Product
+              </Button>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-100">
-              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                <tr>
-                  <th className="px-6 py-4">Product</th>
-                  <th className="px-6 py-4">Supplier</th>
-                  <th className="px-6 py-4">Inventory</th>
-                  <th className="px-6 py-4">Price</th>
-                  <th className="px-6 py-4">Category</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
-                </tr>
-              </thead>
+          {error ? (
+            <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
+          ) : null}
 
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {loading ? (
-                  Array.from({ length: PAGE_SIZE }).map((_, index) => (
-                    <tr key={index} className="animate-pulse">
-                      <td className="px-6 py-5"><div className="h-4 w-40 rounded bg-slate-200" /><div className="mt-2 h-3 w-28 rounded bg-slate-100" /></td>
-                      <td className="px-6 py-5"><div className="h-4 w-36 rounded bg-slate-200" /></td>
-                      <td className="px-6 py-5"><div className="h-6 w-24 rounded-full bg-slate-200" /></td>
-                      <td className="px-6 py-5"><div className="h-4 w-20 rounded bg-slate-200" /></td>
-                      <td className="px-6 py-5"><div className="h-4 w-28 rounded bg-slate-200" /></td>
-                      <td className="px-6 py-5 text-right"><div className="ml-auto h-4 w-24 rounded bg-slate-200" /></td>
-                    </tr>
-                  ))
-                ) : pageRows.length > 0 ? (
-                  pageRows.map((product) => {
-                    const supplierLabel = supplierMap.get(product.supplier_id) ?? product.supplier_id;
-                    const status = stockLabel(Number(product.inventory ?? 0));
+          <div className="overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/90 shadow-[0_24px_80px_-44px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 ease-out hover:-translate-y-0.5">
+            <div className="flex flex-col gap-2 border-b border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">Product Directory</h2>
+                <p className="text-sm text-slate-500">
+                  {loading ? "Loading products..." : `${totalCount} product${totalCount === 1 ? "" : "s"} found`}
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
+                Page {safePage} of {totalPages}
+              </div>
+            </div>
 
-                    return (
-                      <tr key={product.id ?? `${product.sku}-${product.name}`} className="transition hover:bg-slate-50/80">
-                        <td className="px-6 py-5 align-top">
-                          <div className="flex items-start gap-3">
-                            <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                              <Package className="h-5 w-5" />
-                            </div>
-                            <div>
-                              <div className="font-semibold text-slate-950">{product.name}</div>
-                              <div className="mt-1 text-sm text-slate-500">SKU: {product.sku}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-5 align-top text-sm text-slate-700">{supplierLabel}</td>
-                        <td className="px-6 py-5 align-top">
-                          <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${status.className}`}>
-                            {status.text} • {Number(product.inventory ?? 0)} units
-                          </div>
-                        </td>
-                        <td className="px-6 py-5 align-top text-sm font-medium text-slate-700">
-                          ₹{Number(product.price ?? 0).toLocaleString("en-IN")}
-                        </td>
-                        <td className="px-6 py-5 align-top text-sm text-slate-700">{product.category}</td>
-                        <td className="px-6 py-5 align-top text-right">
-                          <div className="inline-flex gap-2">
-                            <Button variant="outline" size="sm" onClick={() => openEditDialog(product)} className="rounded-xl">
-                              <PencilLine className="mr-2 h-3.5 w-3.5" />
-                              Edit
-                            </Button>
-                            <Button variant="destructive" size="sm" onClick={() => setDeleteTarget(product)} className="rounded-xl">
-                              <Trash2 className="mr-2 h-3.5 w-3.5" />
-                              Delete
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-100">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                   <tr>
-                    <td colSpan={6} className="px-6 py-16 text-center">
-                      <div className="mx-auto max-w-md">
-                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                          <Package className="h-6 w-6" />
-                        </div>
-                        <h3 className="mt-5 text-xl font-semibold text-slate-950">
-                          {search ? "No matching products" : "No products yet"}
-                        </h3>
-                        <p className="mt-2 text-sm leading-6 text-slate-500">
-                          {search
-                            ? "Try another search term or clear the filters to view the full inventory."
-                            : "Add the first product to start managing your inventory."}
-                        </p>
-                        {!search ? (
-                          <Button onClick={openCreateDialog} className="mt-6 rounded-2xl px-5">
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add Product
-                          </Button>
-                        ) : null}
-                      </div>
-                    </td>
+                    <th className="px-6 py-4">Product</th>
+                    <th className="px-6 py-4">Supplier</th>
+                    <th className="px-6 py-4">Inventory</th>
+                    <th className="px-6 py-4">Price</th>
+                    <th className="px-6 py-4">Category</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
 
-          <div className="flex flex-col gap-4 border-t border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-slate-500">Showing {pageRows.length} of {totalCount} product{totalCount === 1 ? "" : "s"}</p>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {loading ? (
+                    Array.from({ length: PAGE_SIZE }).map((_, index) => (
+                      <tr key={index} className="animate-pulse">
+                        <td className="px-6 py-5"><div className="h-4 w-40 rounded bg-slate-200" /><div className="mt-2 h-3 w-28 rounded bg-slate-100" /></td>
+                        <td className="px-6 py-5"><div className="h-4 w-36 rounded bg-slate-200" /></td>
+                        <td className="px-6 py-5"><div className="h-6 w-24 rounded-full bg-slate-200" /></td>
+                        <td className="px-6 py-5"><div className="h-4 w-20 rounded bg-slate-200" /></td>
+                        <td className="px-6 py-5"><div className="h-4 w-28 rounded bg-slate-200" /></td>
+                        <td className="px-6 py-5 text-right"><div className="ml-auto h-4 w-24 rounded bg-slate-200" /></td>
+                      </tr>
+                    ))
+                  ) : pageRows.length > 0 ? (
+                    pageRows.map((product) => {
+                      const supplierLabel = supplierMap.get(product.supplier_id) ?? product.supplier_id;
+                      const status = stockLabel(Number(product.inventory ?? 0));
 
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1} className="rounded-xl">
-                <ChevronLeft className="mr-2 h-4 w-4" />
-                Previous
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={safePage === totalPages} className="rounded-xl">
-                Next
-                <ChevronRight className="ml-2 h-4 w-4" />
-              </Button>
+                      return (
+                        <tr key={product.id ?? `${product.sku}-${product.name}`} className="transition hover:bg-slate-50/80">
+                          <td className="px-6 py-5 align-top">
+                            <div className="flex items-start gap-3">
+                              <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                                <Package className="h-5 w-5" />
+                              </div>
+                              <div>
+                                <div className="font-semibold text-slate-950">{product.name}</div>
+                                <div className="mt-1 text-sm text-slate-500">SKU: {product.sku}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-5 align-top text-sm text-slate-700">{supplierLabel}</td>
+                          <td className="px-6 py-5 align-top">
+                            <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${status.className}`}>
+                              {status.text} • {Number(product.inventory ?? 0)} units
+                            </div>
+                          </td>
+                          <td className="px-6 py-5 align-top text-sm font-medium text-slate-700">
+                            ₹{Number(product.price ?? 0).toLocaleString("en-IN")}
+                          </td>
+                          <td className="px-6 py-5 align-top text-sm text-slate-700">{product.category}</td>
+                          <td className="px-6 py-5 align-top text-right">
+                            <div className="inline-flex gap-2">
+                              <Button variant="outline" size="sm" onClick={() => openEditDialog(product)} className="rounded-xl">
+                                <PencilLine className="mr-2 h-3.5 w-3.5" />
+                                Edit
+                              </Button>
+                              <Button variant="destructive" size="sm" onClick={() => setDeleteTarget(product)} className="rounded-xl">
+                                <Trash2 className="mr-2 h-3.5 w-3.5" />
+                                Delete
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-16 text-center">
+                        <div className="mx-auto max-w-md">
+                          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                            <Package className="h-6 w-6" />
+                          </div>
+                          <h3 className="mt-5 text-xl font-semibold text-slate-950">
+                            {search ? "No matching products" : "No products yet"}
+                          </h3>
+                          <p className="mt-2 text-sm leading-6 text-slate-500">
+                            {search
+                              ? "Try another search term or clear the filters to view the full inventory."
+                              : "Add the first product to start managing your inventory."}
+                          </p>
+                          {!search ? (
+                            <Button onClick={openCreateDialog} className="mt-6 rounded-2xl px-5">
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add Product
+                            </Button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex flex-col gap-4 border-t border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-slate-500">Showing {pageRows.length} of {totalCount} product{totalCount === 1 ? "" : "s"}</p>
+
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1} className="rounded-xl">
+                  <ChevronLeft className="mr-2 h-4 w-4" />
+                  Previous
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={safePage === totalPages} className="rounded-xl">
+                  Next
+                  <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
       </div>
 
       {dialogOpen ? (

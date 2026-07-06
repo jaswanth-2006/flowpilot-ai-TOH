@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -13,12 +14,15 @@ from postgrest.exceptions import APIError
 
 from app.core.database import supabase
 from app.schemas.execution_engine import (
+    ApprovalDecisionRequest,
     BusinessMemoryItem,
     ExecutionEnquiryCreate,
     ExecutionPlanContent,
     ExecutionPlanRecord,
     ExecutionSnapshot,
     DecisionItem,
+    FinalRecommendation,
+    RecommendationUpdateRequest,
     ThinkingPanelStep,
     WorkflowStep,
 )
@@ -33,6 +37,8 @@ TABLE_NAME = "execution_plans"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 _LOCAL_EXECUTION_PLAN_STORE: dict[str, ExecutionPlanRecord] = {}
+
+logger = logging.getLogger(__name__)
 
 THINKING_PANEL_TEMPLATE = [
     ("reading_enquiry", "Reading enquiry...", "Parse the customer request, urgency, and business goal."),
@@ -58,6 +64,130 @@ def _strip_json_code_fences(raw_text: str) -> str:
         cleaned_text = re.sub(r"^```(?:json)?\s*", "", cleaned_text.strip(), flags=re.IGNORECASE)
         cleaned_text = re.sub(r"\s*```$", "", cleaned_text.strip())
     return cleaned_text.strip()
+
+
+def _extract_gemini_response_text(response: Any) -> str:
+    if response is None:
+        raise ExecutionEngineError("Gemini response was empty.")
+
+    if hasattr(response, "text") and isinstance(response.text, str) and response.text.strip():
+        return response.text
+
+    candidates: list[str] = []
+
+    def add_text(candidate: Any) -> None:
+        if isinstance(candidate, str) and candidate.strip():
+            candidates.append(candidate.strip())
+
+    if hasattr(response, "output"):
+        output = response.output
+    elif isinstance(response, dict):
+        output = response.get("output")
+    else:
+        output = None
+
+    if isinstance(output, list):
+        for item in output:
+            if isinstance(item, dict):
+                add_text(item.get("text"))
+                content = item.get("content")
+                if isinstance(content, str):
+                    add_text(content)
+                elif isinstance(content, list):
+                    for content_item in content:
+                        if isinstance(content_item, dict):
+                            add_text(content_item.get("text"))
+                            add_text(content_item.get("content"))
+                        else:
+                            add_text(content_item)
+            elif isinstance(item, str):
+                add_text(item)
+    elif isinstance(output, dict):
+        add_text(output.get("text"))
+        content = output.get("content")
+        if isinstance(content, str):
+            add_text(content)
+        elif isinstance(content, list):
+            for content_item in content:
+                if isinstance(content_item, dict):
+                    add_text(content_item.get("text"))
+                    add_text(content_item.get("content"))
+                else:
+                    add_text(content_item)
+
+    if hasattr(response, "message") and isinstance(response.message, str) and response.message.strip():
+        add_text(response.message)
+
+    if candidates:
+        return candidates[0]
+
+    raise ExecutionEngineError("Unable to extract text from Gemini response.")
+
+
+def _parse_gemini_payload(response_text: str) -> dict[str, Any]:
+    cleaned_text = _strip_json_code_fences(response_text)
+    try:
+        parsed_payload = json.loads(cleaned_text)
+    except json.JSONDecodeError as exc:
+        raise ExecutionEngineError("Gemini did not return valid JSON.") from exc
+
+    if not isinstance(parsed_payload, dict):
+        raise ExecutionEngineError("Gemini response must be a JSON object.")
+
+    _validate_gemini_payload(parsed_payload)
+    return parsed_payload
+
+
+def _validate_gemini_payload(payload: dict[str, Any]) -> None:
+    required_keys = [
+        "intent",
+        "required_tasks",
+        "required_agents",
+        "thinking_panel",
+        "decision_panel",
+        "workflow_steps",
+        "risk_analysis",
+        "approval_requirement",
+        "final_recommendation",
+        "business_memory",
+    ]
+    missing_keys = [key for key in required_keys if key not in payload]
+    if missing_keys:
+        raise ExecutionEngineError(f"Gemini payload missing required keys: {', '.join(missing_keys)}")
+
+    list_keys = [
+        "required_tasks",
+        "required_agents",
+        "thinking_panel",
+        "decision_panel",
+        "workflow_steps",
+        "risk_analysis",
+        "business_memory",
+    ]
+    for key in list_keys:
+        if not isinstance(payload.get(key), list):
+            raise ExecutionEngineError(f"Gemini payload '{key}' must be an array.")
+
+    final_payload = payload["final_recommendation"]
+    if not isinstance(final_payload, dict):
+        raise ExecutionEngineError("Gemini payload 'final_recommendation' must be an object.")
+
+    final_keys = [
+        "supplier",
+        "products",
+        "estimated_quote",
+        "expected_margin",
+        "delivery_timeline",
+        "approval_required",
+        "business_reasoning",
+    ]
+    missing_final = [key for key in final_keys if key not in final_payload]
+    if missing_final:
+        raise ExecutionEngineError(
+            "Gemini payload final_recommendation missing keys: " + ", ".join(missing_final)
+        )
+    if not isinstance(final_payload["products"], list):
+        raise ExecutionEngineError("Gemini payload 'final_recommendation.products' must be an array.")
 
 
 def _normalize_workflow_steps(raw_steps: list[dict[str, Any]]) -> list[WorkflowStep]:
@@ -104,6 +234,7 @@ def _build_plan_content(raw_payload: dict[str, Any]) -> ExecutionPlanContent:
             if isinstance(item, dict)
         ],
         approval_requirement=str(raw_payload.get("approval_requirement") or "No approval requirement provided."),
+        final_recommendation=_normalize_final_recommendation(raw_payload.get("final_recommendation", {})),
         business_memory=_normalize_business_memory(raw_payload.get("business_memory", [])),
         execution_history=[],
     )
@@ -174,18 +305,335 @@ def _normalize_business_memory(raw_items: list[dict[str, Any]]) -> list[Business
     return normalized_items
 
 
-def _parse_gemini_payload(response_text: str) -> dict[str, Any]:
-    cleaned_text = _strip_json_code_fences(response_text)
+def _normalize_final_recommendation(raw_payload: dict[str, Any]) -> FinalRecommendation | None:
+    if not isinstance(raw_payload, dict):
+        return None
 
+    return FinalRecommendation(
+        supplier=str(raw_payload.get("supplier") or "Unknown supplier"),
+        products=[str(item) for item in raw_payload.get("products", []) if str(item).strip()],
+        estimated_quote=str(raw_payload.get("estimated_quote") or "TBD"),
+        expected_margin=str(raw_payload.get("expected_margin") or "TBD"),
+        delivery_timeline=str(raw_payload.get("delivery_timeline") or "TBD"),
+        approval_required=str(raw_payload.get("approval_required") or "Approval recommended."),
+        business_reasoning=str(raw_payload.get("business_reasoning") or ""),
+    )
+
+
+def _load_supabase_rows(table_name: str, limit: int = 100) -> list[dict[str, Any]]:
     try:
-        parsed_payload = json.loads(cleaned_text)
-    except json.JSONDecodeError as exc:
-        raise ExecutionEngineError("Gemini did not return valid JSON.") from exc
+        response = supabase.table(table_name).select("*").limit(limit).execute()
+        return response.data or []
+    except Exception:
+        return []
 
-    if not isinstance(parsed_payload, dict):
-        raise ExecutionEngineError("Gemini response must be a JSON object.")
 
-    return parsed_payload
+def _summarize_supabase_context(enquiry: str) -> tuple[str, str, str]:
+    customers = _load_supabase_rows("customers", limit=10)
+    suppliers = _load_supabase_rows("suppliers", limit=25)
+    products = _load_supabase_rows("products", limit=50)
+
+    customer_summary = "\n".join(
+        f"- {str(customer.get('name') or 'Unknown')} | company: {str(customer.get('company_id') or 'N/A')} | segment: {str(customer.get('segment') or 'N/A')}"
+        for customer in customers
+    ) or "- No customer data available"
+
+    supplier_summary = "\n".join(
+        f"- {str(supplier.get('name') or 'Unknown')} | rating: {supplier.get('rating', 'N/A')} | lead_time: {supplier.get('lead_time', 'N/A')} | available_products: {len([p for p in products if p.get('supplier_id') == supplier.get('id')])} | stock: {sum(int(p.get('inventory') or 0) for p in products if p.get('supplier_id') == supplier.get('id'))} | price_range: {min((float(p.get('price') or 0) for p in products if p.get('supplier_id') == supplier.get('id')), default='N/A')} - {max((float(p.get('price') or 0) for p in products if p.get('supplier_id') == supplier.get('id')), default='N/A')}"
+        for supplier in suppliers
+    ) or "- No supplier data available"
+
+    product_summary = "\n".join(
+        f"- {str(product.get('name') or 'Unknown')} | sku: {str(product.get('sku') or 'N/A')} | supplier_id: {str(product.get('supplier_id') or 'N/A')} | price: {product.get('price', 'N/A')} | inventory: {product.get('inventory', 'N/A')} | category: {str(product.get('category') or 'N/A')}"
+        for product in products
+    ) or "- No product data available"
+
+    return customer_summary, supplier_summary, product_summary
+
+
+def _normalize_lead_time(value: Any) -> int:
+    if value is None:
+        return 999
+
+    raw = str(value).lower().strip()
+    if raw.isdigit():
+        return int(raw)
+
+    match = re.search(r"(\d+)", raw)
+    if match:
+        quantity = int(match.group(1))
+        if "week" in raw:
+            return quantity * 7
+        if "day" in raw:
+            return quantity
+        if "hour" in raw:
+            return max(1, quantity // 24)
+
+    return 999
+
+
+def _score_supplier_candidates(suppliers: list[dict[str, Any]], products: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if not suppliers or not products:
+        return None, []
+
+    products_by_supplier: dict[str, list[dict[str, Any]]] = {}
+    for product in products:
+        supplier_id = str(product.get("supplier_id") or "")
+        if supplier_id:
+            products_by_supplier.setdefault(supplier_id, []).append(product)
+
+    scores: list[tuple[float, dict[str, Any], list[dict[str, Any]]]] = []
+    for supplier in suppliers:
+        supplier_id = str(supplier.get("id") or "")
+        supplier_products = products_by_supplier.get(supplier_id, [])
+        total_inventory = sum(int(product.get("inventory") or 0) for product in supplier_products)
+        average_price = (
+            sum(float(product.get("price") or 0) for product in supplier_products) / len(supplier_products)
+            if supplier_products else 0.0
+        )
+        rating = float(supplier.get("rating") or 0)
+        lead_days = _normalize_lead_time(supplier.get("lead_time"))
+
+        if not supplier_products:
+            continue
+
+        score = (
+            total_inventory * 0.6
+            + rating * 10.0
+            + max(0, 10.0 - lead_days) * 5.0
+            + average_price * 0.05
+        )
+        scores.append((score, supplier, supplier_products))
+
+    if not scores:
+        return None, []
+
+    scores.sort(key=lambda item: item[0], reverse=True)
+    _, best_supplier, best_products = scores[0]
+    return best_supplier, best_products
+
+
+def _load_supplier_by_name(supplier_name: str) -> dict[str, Any] | None:
+    suppliers = _load_supabase_rows("suppliers", limit=50)
+    normalized_name = supplier_name.strip().lower()
+    for supplier in suppliers:
+        if str(supplier.get("name", "")).strip().lower() == normalized_name:
+            return supplier
+    return None
+
+
+def _supplier_is_unavailable(supplier: dict[str, Any], product_count: int) -> bool:
+    total_inventory = int(supplier.get("inventory") or 0) if supplier.get("inventory") is not None else 0
+    lead_days = _normalize_lead_time(supplier.get("lead_time"))
+    rating = float(supplier.get("rating") or 0)
+    return total_inventory < max(5, product_count * 2) or lead_days > 14 or rating < 3.5
+
+
+def _recover_unavailable_supplier(record: ExecutionPlanRecord) -> tuple[ExecutionPlanRecord, str | None]:
+    if not record.execution_plan.final_recommendation:
+        return record, None
+
+    current_recommendation = record.execution_plan.final_recommendation
+    original_supplier = current_recommendation.supplier
+    supplier = _load_supplier_by_name(original_supplier)
+    if supplier and not _supplier_is_unavailable(supplier, len(current_recommendation.products)):
+        return record, None
+
+    alternate = _find_alternate_supplier(original_supplier, record.enquiry)
+    if not alternate:
+        return record, None
+
+    plan_copy = record.execution_plan.model_copy(deep=True)
+    plan_copy.final_recommendation = alternate
+    plan_copy.approval_requirement = alternate.approval_required
+    plan_copy.final_recommendation.business_reasoning = (
+        f"Original supplier {original_supplier} became unavailable. "
+        f"The AI recovered with alternate supplier {alternate.supplier}. "
+        f"{alternate.business_reasoning}"
+    )
+
+    updated_record = record.model_copy(update={"execution_plan": plan_copy})
+    note = (
+        f"Supplier '{original_supplier}' became unavailable during execution. "
+        f"The AI recovered by selecting alternate supplier '{alternate.supplier}'."
+    )
+    return updated_record, note
+
+
+def _choose_best_recommendation(enquiry: str) -> FinalRecommendation:
+    suppliers = _load_supabase_rows("suppliers", limit=50)
+    products = _load_supabase_rows("products", limit=100)
+
+    matched_products = [
+        product
+        for product in products
+        if any(
+            token in str(product.get("name", "")).lower() or token in str(product.get("category", "")).lower()
+            for token in _tokenize_text(enquiry.lower())
+        )
+    ]
+    if not matched_products:
+        matched_products = products
+
+    chosen_supplier, supplier_products = _score_supplier_candidates(suppliers, matched_products)
+    if not chosen_supplier or not supplier_products:
+        return _choose_best_fallback_recommendation(enquiry)
+
+    top_products = sorted(
+        supplier_products,
+        key=lambda item: (int(item.get("inventory") or 0), float(item.get("price") or 0)),
+        reverse=True,
+    )[:3]
+
+    selected_product_names = [str(product.get("name") or "Unknown product") for product in top_products]
+    total_price = sum(float(product.get("price") or 0) for product in top_products)
+    estimated_quote = f"${total_price * 1.25:,.2f}"
+    expected_margin = f"{max(12, min(28, int(total_price * 0.20)))}%"
+    supplier_name = str(chosen_supplier.get("name") or "Recommended supplier not found")
+    delivery_timeline = str(chosen_supplier.get("lead_time") or "Standard delivery")
+    rating = float(chosen_supplier.get("rating") or 0)
+    total_inventory = sum(int(product.get("inventory") or 0) for product in supplier_products)
+
+    approval_required = (
+        "Approval required due to low stock, long lead time, or weaker supplier rating."
+        if total_inventory < 20 or _normalize_lead_time(chosen_supplier.get("lead_time")) > 10 or rating < 4.0
+        else "No special approval required."
+    )
+
+    business_reasoning = (
+        f"Selected {supplier_name} because it has the highest combined stock ({total_inventory} units), a strong rating ({rating}/5), "
+        f"and one of the shortest lead times ({delivery_timeline}) among available suppliers. "
+        f"The recommended products were picked for high inventory and strong current pricing to maximize fulfillment probability and profit potential."
+    )
+
+    return FinalRecommendation(
+        supplier=supplier_name,
+        products=selected_product_names,
+        estimated_quote=estimated_quote,
+        expected_margin=expected_margin,
+        delivery_timeline=delivery_timeline,
+        approval_required=approval_required,
+        business_reasoning=business_reasoning,
+    )
+
+
+def _find_alternate_supplier(original_supplier_name: str, enquiry: str) -> FinalRecommendation | None:
+    suppliers = _load_supabase_rows("suppliers", limit=50)
+    products = _load_supabase_rows("products", limit=100)
+    if not suppliers or not products:
+        return None
+
+    matched_products = [
+        product
+        for product in products
+        if any(
+            token in str(product.get("name", "")).lower() or token in str(product.get("category", "")).lower()
+            for token in _tokenize_text(enquiry.lower())
+        )
+    ]
+    if not matched_products:
+        matched_products = products
+
+    alternate_suppliers = [supplier for supplier in suppliers if str(supplier.get("name", "")).strip().lower() != original_supplier_name.strip().lower()]
+    if not alternate_suppliers:
+        return None
+
+    chosen_supplier, supplier_products = _score_supplier_candidates(alternate_suppliers, matched_products)
+    if not chosen_supplier or not supplier_products:
+        return None
+
+    top_products = sorted(
+        supplier_products,
+        key=lambda item: (int(item.get("inventory") or 0), float(item.get("price") or 0)),
+        reverse=True,
+    )[:3]
+    selected_product_names = [str(product.get("name") or "Unknown product") for product in top_products]
+    total_price = sum(float(product.get("price") or 0) for product in top_products)
+    supplier_name = str(chosen_supplier.get("name") or "Alternative supplier not found")
+    delivery_timeline = str(chosen_supplier.get("lead_time") or "Standard delivery")
+    rating = float(chosen_supplier.get("rating") or 0)
+    total_inventory = sum(int(product.get("inventory") or 0) for product in supplier_products)
+
+    approval_required = (
+        "Approval required because the selected supplier has constrained inventory or longer lead time."
+        if total_inventory < 20 or _normalize_lead_time(chosen_supplier.get("lead_time")) > 10 or rating < 4.0
+        else "No special approval required."
+    )
+
+    business_reasoning = (
+        f"After the primary supplier became unavailable, the AI selected {supplier_name} as the next best supplier, "
+        f"because it still has sufficient inventory and a competitive lead time ({delivery_timeline}). "
+        f"The products were chosen to preserve fulfillment probability while keeping the quote viable."
+    )
+
+    return FinalRecommendation(
+        supplier=supplier_name,
+        products=selected_product_names,
+        estimated_quote=f"${total_price * 1.25:,.2f}",
+        expected_margin=f"{max(12, min(28, int(total_price * 0.20)))}%",
+        delivery_timeline=delivery_timeline,
+        approval_required=approval_required,
+        business_reasoning=business_reasoning,
+    )
+
+
+def _choose_best_fallback_recommendation(enquiry: str) -> FinalRecommendation:
+    products = _load_supabase_rows("products", limit=100)
+    suppliers = _load_supabase_rows("suppliers", limit=50)
+    if not suppliers or not products:
+        return FinalRecommendation(
+            supplier="Recommended supplier not found",
+            products=["Product recommendations unavailable"],
+            estimated_quote="TBD",
+            expected_margin="TBD",
+            delivery_timeline="TBD",
+            approval_required="Approval recommended when data is unavailable.",
+            business_reasoning="No inventory or supplier data could be loaded from Supabase, so the recommendation uses a default fallback path.",
+        )
+
+    chosen_supplier, supplier_products = _score_supplier_candidates(suppliers, products)
+    if not chosen_supplier or not supplier_products:
+        return FinalRecommendation(
+            supplier="Recommended supplier not found",
+            products=["No suitable product matches found"],
+            estimated_quote="TBD",
+            expected_margin="TBD",
+            delivery_timeline="TBD",
+            approval_required="Approval recommended when exact matching data is unavailable.",
+            business_reasoning="Unable to identify a strong supplier-product match from the available data.",
+        )
+
+    top_products = sorted(
+        supplier_products,
+        key=lambda item: (int(item.get("inventory") or 0), float(item.get("price") or 0)),
+        reverse=True,
+    )[:3]
+    selected_product_names = [str(product.get("name") or "Unknown product") for product in top_products]
+    total_price = sum(float(product.get("price") or 0) for product in top_products)
+    supplier_name = str(chosen_supplier.get("name") or "Recommended supplier not found")
+    delivery_timeline = str(chosen_supplier.get("lead_time") or "Standard delivery")
+    rating = float(chosen_supplier.get("rating") or 0)
+    total_inventory = sum(int(product.get("inventory") or 0) for product in supplier_products)
+
+    approval_required = (
+        "Approval required because the selected supplier has constrained inventory or longer lead time."
+        if total_inventory < 20 or _normalize_lead_time(chosen_supplier.get("lead_time")) > 10 or rating < 4.0
+        else "No special approval required."
+    )
+
+    return FinalRecommendation(
+        supplier=supplier_name,
+        products=selected_product_names,
+        estimated_quote=f"${total_price * 1.25:,.2f}",
+        expected_margin=f"{max(12, min(28, int(total_price * 0.20)))}%",
+        delivery_timeline=delivery_timeline,
+        approval_required=approval_required,
+        business_reasoning=(
+            f"Chosen supplier {supplier_name} because it shows the best real-time fulfillment profile in the current dataset: "
+            f"strong stock availability, manageable lead time, and a solid quality rating. "
+            f"This fallback recommendation leans on actual Supabase inventory and supplier metrics rather than a generic default."
+        ),
+    )
 
 
 def _tokenize_text(value: str) -> set[str]:
@@ -269,9 +717,11 @@ def _build_business_memory(enquiry: str) -> list[BusinessMemoryItem]:
 
 def _get_gemini_model():
     if not GEMINI_API_KEY:
+        logger.info("GEMINI_API_KEY not configured; using deterministic fallback.")
         return None
 
     if genai is None:
+        logger.warning("google.generativeai package is unavailable; using deterministic fallback.")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
@@ -415,58 +865,88 @@ def _build_fallback_plan_content(enquiry: str, business_memory: list[BusinessMem
         ],
         approval_requirement="Require approval if the recommended margin is below threshold or inventory is constrained.",
         business_memory=business_memory,
+        final_recommendation=_choose_best_recommendation(enquiry),
         execution_history=[],
     )
 
 
-def _generate_plan_from_gemini(enquiry: str) -> ExecutionPlanContent:
-    business_memory = _build_business_memory(enquiry)
-    model = _get_gemini_model()
-    if model is None:
-        return _build_fallback_plan_content(enquiry, business_memory)
+def _build_gemini_prompt(enquiry: str, customer_context: str, supplier_context: str, product_context: str) -> str:
+    return f"""
+You are the FlowPilot AI Operations Center. Your job is to generate a single explainable execution plan for the customer's enquiry.
+Use the actual business data below to ground every recommendation in real Supabase context.
+Only output valid JSON with no markdown fences or extra commentary.
 
-    prompt = f"""
-You are the FlowPilot AI Operations Center.
-Analyze the customer's enquiry and produce a polished, explainable, demo-ready execution plan.
+Customer context:
+{customer_context}
 
-Return only valid JSON with these keys:
-- intent: concise summary of what the enquiry is trying to achieve
-- required_tasks: array of strings
-- required_agents: array of strings
-- thinking_panel: array of objects with keys id, label, detail, status
-- decision_panel: array of objects with keys title, why, evidence, selected_option, confidence
-- workflow_steps: array of objects with keys id, title, description, reasoning, input_summary, output_summary, execution_time_seconds, assigned_agent
-- risk_analysis: array of objects with keys risk, impact, mitigation
-- approval_requirement: string describing whether approval is needed and from whom
-- business_memory: array of objects with keys execution_id, title, summary, similarity_reason, influence
+Supplier context:
+{supplier_context}
 
-Rules:
-- Do not wrap the response in markdown or code fences.
-- Never output commentary outside the JSON object.
-- Keep workflow steps dynamic based on the enquiry.
-- Use a realistic number of steps for the request complexity.
-- Make the plan actionable, specific, and operationally grounded.
-- Make the decision panel explain why each recommendation was chosen.
-- Use the provided business memory to explain how earlier executions influenced the plan.
-
-Business memory context:
-{json.dumps([memory_item.model_dump() for memory_item in business_memory], ensure_ascii=False)}
+Product context:
+{product_context}
 
 Customer enquiry:
 {enquiry}
+
+Guidelines:
+- Use actual inventory, supplier rating, delivery time, and pricing from the provided dataset.
+- Choose products and a supplier that are realistically available based on stock and supplier metrics.
+- If the chosen supplier is not a good fit, explain why and provide a stronger alternative.
+- Every recommendation must include clear business reasoning grounded in the data.
+- Keep the plan actionable and operationally specific.
+- Keep the response structure strict and valid JSON.
+
+Required JSON structure:
+{{
+  "intent": string,
+  "required_tasks": [string],
+  "required_agents": [string],
+  "thinking_panel": [{{"id": string, "label": string, "detail": string, "status": string}}],
+  "decision_panel": [{{"title": string, "why": string, "evidence": [string], "selected_option": string, "confidence": string}}],
+  "workflow_steps": [{{"id": string, "title": string, "description": string, "reasoning": string, "input_summary": string, "output_summary": string, "execution_time_seconds": number, "assigned_agent": string}}],
+  "risk_analysis": [{{"risk": string, "impact": string, "mitigation": string}}],
+  "approval_requirement": string,
+  "final_recommendation": {{
+    "supplier": string,
+    "products": [string],
+    "estimated_quote": string,
+    "expected_margin": string,
+    "delivery_timeline": string,
+    "approval_required": string,
+    "business_reasoning": string
+  }},
+  "business_memory": [{{"execution_id": string | null, "title": string, "summary": string, "similarity_reason": string, "influence": string}}]
+}}
 """.strip()
+
+
+def _generate_plan_from_gemini(enquiry: str) -> ExecutionPlanContent:
+    business_memory = _build_business_memory(enquiry)
+    customer_context, supplier_context, product_context = _summarize_supabase_context(enquiry)
+    model = _get_gemini_model()
+    if model is None:
+        logger.info("Gemini unavailable; using deterministic planner.")
+        return _build_fallback_plan_content(enquiry, business_memory)
+
+    prompt = _build_gemini_prompt(enquiry, customer_context, supplier_context, product_context)
 
     try:
         response = model.generate_content(prompt)
-        response_text = getattr(response, "text", "") or ""
+        response_text = _extract_gemini_response_text(response)
         raw_payload = _parse_gemini_payload(response_text)
         plan_content = _build_plan_content(raw_payload)
+
         if not plan_content.decision_panel:
             plan_content.decision_panel = _build_default_decisions(plan_content, business_memory)
         if not plan_content.business_memory:
             plan_content.business_memory = business_memory
+        if not plan_content.final_recommendation:
+            plan_content.final_recommendation = _choose_best_recommendation(enquiry)
+
+        logger.info("Execution plan generated by Gemini.")
         return plan_content
-    except Exception:
+    except Exception as exc:
+        logger.warning("Gemini generation failed; falling back to deterministic planner.", exc_info=True)
         return _build_fallback_plan_content(enquiry, business_memory)
 
 
@@ -625,6 +1105,77 @@ def get_execution_plan(plan_id: str) -> ExecutionPlanRecord:
         raise
 
 
+def submit_approval_decision(plan_id: str, approval_payload: ApprovalDecisionRequest) -> ExecutionPlanRecord:
+    current_record = get_execution_plan(plan_id)
+    plan_copy = current_record.execution_plan.model_copy(deep=True)
+    plan_copy.approval_status = approval_payload.decision
+
+    note_map = {
+        "approved": "Plan approved by human reviewer.",
+        "rejected": "Plan rejected by human reviewer.",
+        "changes_requested": "Human reviewer requested changes to the plan.",
+    }
+    note = note_map.get(approval_payload.decision, "Approval decision recorded.")
+    if approval_payload.note:
+        note = f"{note} Note: {approval_payload.note}"
+
+    updated_record = current_record.model_copy(update={"execution_plan": plan_copy})
+    updated_record = _persist_state(
+        updated_record,
+        current_record.execution_plan.workflow_steps,
+        status=current_record.status,
+        frame_type="plan_running" if current_record.status == "running" else current_record.status,
+        note=note,
+    )
+    return updated_record
+
+
+def submit_recommendation_update(plan_id: str, recommendation_payload: RecommendationUpdateRequest) -> ExecutionPlanRecord:
+    current_record = get_execution_plan(plan_id)
+    plan_copy = current_record.execution_plan.model_copy(deep=True)
+    final_recommendation = plan_copy.final_recommendation
+
+    if final_recommendation is None:
+        raise ExecutionEngineError("No final recommendation exists for this plan.")
+
+    if recommendation_payload.supplier is not None:
+        final_recommendation.supplier = recommendation_payload.supplier
+    if recommendation_payload.products is not None:
+        final_recommendation.products = [product for product in recommendation_payload.products if product.strip()]
+    if recommendation_payload.estimated_quote is not None:
+        final_recommendation.estimated_quote = recommendation_payload.estimated_quote
+    if recommendation_payload.expected_margin is not None:
+        final_recommendation.expected_margin = recommendation_payload.expected_margin
+    if recommendation_payload.delivery_timeline is not None:
+        final_recommendation.delivery_timeline = recommendation_payload.delivery_timeline
+
+    plan_copy.final_recommendation = final_recommendation
+    plan_copy.approval_status = "changes_requested"
+
+    note_parts = ["Human reviewer modified the final recommendation."]
+    if recommendation_payload.supplier is not None:
+        note_parts.append("Supplier updated.")
+    if recommendation_payload.products is not None:
+        note_parts.append("Products updated.")
+    if recommendation_payload.estimated_quote is not None:
+        note_parts.append("Quote updated.")
+    if recommendation_payload.expected_margin is not None:
+        note_parts.append("Margin updated.")
+    if recommendation_payload.delivery_timeline is not None:
+        note_parts.append("Delivery timeline updated.")
+
+    note = " ".join(note_parts)
+    updated_record = current_record.model_copy(update={"execution_plan": plan_copy})
+    updated_record = _persist_state(
+        updated_record,
+        current_record.execution_plan.workflow_steps,
+        status=current_record.status,
+        frame_type="plan_running" if current_record.status == "running" else current_record.status,
+        note=note,
+    )
+    return updated_record
+
+
 def create_execution_plan(enquiry_payload: ExecutionEnquiryCreate) -> ExecutionPlanRecord:
     generated_plan = _generate_plan_from_gemini(enquiry_payload.enquiry)
     record = ExecutionPlanRecord(
@@ -685,6 +1236,18 @@ async def execute_plan(plan_id: str) -> None:
                 note=f"Completed {step.title}.",
                 active_step=step,
             )
+
+            if "supplier" in step.title.lower():
+                recovered_record, recovery_note = _recover_unavailable_supplier(current_record)
+                if recovery_note:
+                    current_record = _persist_state(
+                        recovered_record,
+                        working_steps,
+                        status="running",
+                        frame_type="step_running",
+                        note=recovery_note,
+                        active_step=step,
+                    )
 
         _persist_state(
             current_record,

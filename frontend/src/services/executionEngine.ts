@@ -66,6 +66,17 @@ export type RiskAnalysisItem = {
   mitigation: string;
 };
 
+export type FinalRecommendation = {
+  supplier: string;
+  products: string[];
+  estimated_quote: string;
+  expected_margin: string;
+  delivery_timeline: string;
+  approval_required: string;
+  business_reasoning: string;
+  confidence_score?: string;
+};
+
 export type ExecutionPlanContent = {
   intent: string;
   required_tasks: string[];
@@ -75,8 +86,18 @@ export type ExecutionPlanContent = {
   workflow_steps: WorkflowStep[];
   risk_analysis: RiskAnalysisItem[];
   approval_requirement: string;
+  approval_status: string;
+  final_recommendation?: FinalRecommendation | null;
   business_memory: BusinessMemoryItem[];
   execution_history: ExecutionSnapshot[];
+};
+
+export type RecommendationUpdateRequest = {
+  supplier?: string;
+  products?: string[];
+  expected_margin?: string;
+  delivery_timeline?: string;
+  estimated_quote?: string;
 };
 
 export type ExecutionPlanRecord = {
@@ -111,5 +132,18 @@ export async function getExecutionPlan(planId: string) {
 
 export async function getExecutionPlans() {
   const response = await api.get<ExecutionPlanRecord[]>("/execution-engine/plans");
+  return response.data;
+}
+
+export async function approveExecutionPlan(planId: string, decision: "approved" | "rejected" | "changes_requested", note?: string) {
+  const response = await api.post<ExecutionPlanResponse>(`/execution-engine/plans/${planId}/approval`, {
+    decision,
+    note,
+  });
+  return response.data;
+}
+
+export async function updateFinalRecommendation(planId: string, payload: RecommendationUpdateRequest) {
+  const response = await api.patch<ExecutionPlanResponse>(`/execution-engine/plans/${planId}/recommendation`, payload);
   return response.data;
 }

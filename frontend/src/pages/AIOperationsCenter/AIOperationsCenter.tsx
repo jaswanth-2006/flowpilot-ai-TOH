@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -26,8 +26,11 @@ import { Button } from "../../components/ui/button";
 import {
   createExecutionPlan,
   getExecutionPlan,
+  approveExecutionPlan,
+  updateFinalRecommendation,
   type BusinessMemoryItem,
   type ExecutionPlanRecord,
+  type FinalRecommendation,
   type PlanStatus,
   type ReplayFrameType,
   type StepStatus,
@@ -44,6 +47,15 @@ type WorkflowNodeData = {
   assignedAgent: string;
   status: StepStatus;
   order: number;
+};
+
+type ExtractedDetails = {
+  customerName?: string;
+  products?: string[];
+  quantities?: string;
+  budget?: string;
+  deadline?: string;
+  source?: string;
 };
 
 const PLAN_STATUS_STYLES: Record<PlanStatus, { label: string; className: string }> = {
@@ -115,7 +127,7 @@ function buildWorkflowGraph(steps: WorkflowStep[]): { nodes: Array<Node<Workflow
   const nodes = steps.map((step, index) => ({
     id: step.id,
     type: "workflowStep",
-    position: { x: 0, y: index * 240 },
+    position: { x: index % 2 === 0 ? 24 : 520, y: index * 220 },
     data: {
       title: step.title,
       description: step.description,
@@ -143,10 +155,10 @@ function buildWorkflowGraph(steps: WorkflowStep[]): { nodes: Array<Node<Workflow
       animated: step.status === "running",
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        color: active ? "#0891b2" : "#cbd5e1",
+        color: active ? "#0f766e" : "#94a3b8",
       },
       style: {
-        stroke: active ? "#0891b2" : "#cbd5e1",
+        stroke: active ? "#0f766e" : "#94a3b8",
         strokeWidth: 2,
       },
     } satisfies Edge;
@@ -171,7 +183,7 @@ function formatSeconds(value: number) {
 
 function StatCard({ label, value, sublabel }: { label: string; value: string; sublabel?: string }) {
   return (
-    <div className="rounded-3xl border border-white/60 bg-white p-4 shadow-[0_16px_40px_-34px_rgba(15,23,42,0.35)]">
+    <div className="rounded-3xl border border-white/60 bg-white p-4 shadow-[0_16px_40px_-34px_rgba(15,23,42,0.35)] transition-transform duration-200 hover:-translate-y-0.5">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{label}</div>
       <div className="mt-2 text-lg font-semibold text-slate-950">{value}</div>
       {sublabel ? <div className="mt-1 text-sm text-slate-500">{sublabel}</div> : null}
@@ -187,11 +199,266 @@ export default function AIOperationsCenter() {
   const [error, setError] = useState<string | null>(null);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
   const [thinkingCursor, setThinkingCursor] = useState(0);
+  const [approvalNote, setApprovalNote] = useState<string>("");
+  const [editingRecommendation, setEditingRecommendation] = useState(false);
+  const [recommendationDraft, setRecommendationDraft] = useState({
+    supplier: "",
+    products: "",
+    estimated_quote: "",
+    expected_margin: "",
+    delivery_timeline: "",
+  });
+  const [savingRecommendation, setSavingRecommendation] = useState(false);
+  const [decisionInFlight, setDecisionInFlight] = useState(false);
+  const [extractedFields, setExtractedFields] = useState<ExtractedDetails | null>(null);
+  const [processingUpload, setProcessingUpload] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const thinkingPanel = activePlan?.execution_plan.thinking_panel ?? [];
   const decisionPanel = activePlan?.execution_plan.decision_panel ?? [];
   const businessMemory = activePlan?.execution_plan.business_memory ?? [];
   const executionHistory = activePlan?.execution_plan.execution_history ?? [];
+  const finalRecommendation = activePlan?.execution_plan.final_recommendation as FinalRecommendation | null;
+  const approvalStatus = activePlan?.execution_plan.approval_status ?? "pending";
+  const recommendationConfidence =
+    finalRecommendation?.confidence_score ?? decisionPanel[0]?.confidence ?? "Medium";
+
+  function parseAmount(value: string | undefined): number | null {
+    if (!value) {
+      return null;
+    }
+    const numeric = value.replace(/[^0-9.]/g, "");
+    const amount = Number(numeric);
+    return Number.isFinite(amount) ? amount : null;
+  }
+
+  async function readFileAsText(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(new Error("Unable to read file."));
+      reader.readAsText(file);
+    });
+  }
+
+  async function extractTextFromPdf(file: File): Promise<string> {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const workerUrl = new URL("pdfjs-dist/legacy/build/pdf.worker.min.mjs", import.meta.url);
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.toString();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let content = "";
+    for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+      const page = await pdf.getPage(pageIndex);
+      const pageText = await page.getTextContent();
+      content += pageText.items.map((item: any) => item.str).join(" ") + "\n\n";
+    }
+    return content;
+  }
+
+  async function extractTextFromImage(file: File): Promise<string> {
+    const tesseract: any = await import("tesseract.js");
+    const worker = await tesseract.createWorker(undefined, undefined, { logger: () => null });
+    await worker.load();
+    await worker.loadLanguage("eng");
+    await worker.initialize("eng");
+    const blobUrl = URL.createObjectURL(file);
+    const { data } = await worker.recognize(blobUrl);
+    URL.revokeObjectURL(blobUrl);
+    await worker.terminate();
+    return data.text;
+  }
+
+  function parseStructuredDetails(text: string, source?: string): { enquiryText: string; details: ExtractedDetails } {
+    const normalizedText = text.replace(/\r\n/g, "\n");
+    const firstLines = normalizedText.split("\n").slice(0, 8).join(" ");
+
+    const findMatch = (patterns: RegExp[]) => {
+      for (const pattern of patterns) {
+        const match = pattern.exec(normalizedText);
+        if (match?.[1]) {
+          return match[1].trim();
+        }
+      }
+      return undefined;
+    };
+
+    const customerName = findMatch([
+      /Customer\s*Name[:\-]\s*(.+)/i,
+      /Customer[:\-]\s*(.+)/i,
+      /Dear\s+([A-Za-z][A-Za-z\s]+?)(?:,|\n)/i,
+      /Hi\s+([A-Za-z][A-Za-z\s]+?)(?:,|\n)/i,
+      /Hello\s+([A-Za-z][A-Za-z\s]+?)(?:,|\n)/i,
+    ]);
+
+    const budget = findMatch([
+      /budget[:\-]?\s*\$?([\d,]+(?:\.\d+)?)/i,
+      /budgeted[:\-]?\s*\$?([\d,]+(?:\.\d+)?)/i,
+      /\$([\d,]+(?:\.\d+)?)(?:\s*(?:budget|max|cap|limit))?/i,
+      /(?:budget|cost|spend|quote|estimate|pricing)[^\n]*?\$?([\d,]+(?:\.\d+)?)/i,
+    ]);
+
+    const deadline = findMatch([
+      /deadline[:\-]?\s*([A-Za-z0-9 ,/\-]+)/i,
+      /due\s*(?:by)?\s*([A-Za-z0-9 ,/\-]+)/i,
+      /deliver(?:y)?\s*(?:by|on)\s*([A-Za-z0-9 ,/\-]+)/i,
+    ]);
+
+    const rawLines = normalizedText.split("\n").map((line) => line.trim()).filter(Boolean);
+    const products: string[] = [];
+    const quantities: string[] = [];
+
+    const productPattern = /(?:product[s]?|item[s]?|sku)[:\-]?\s*([A-Za-z0-9&\- ]+?)(?:\s*[:\-]\s*(\d+))?(?:\s*(?:units|pcs|pieces|qty|quantity))?/gi;
+    let match: RegExpExecArray | null;
+    while ((match = productPattern.exec(normalizedText))) {
+      if (match[1]) {
+        const itemName = match[1].trim();
+        if (itemName && !products.includes(itemName)) {
+          products.push(itemName);
+        }
+        if (match[2]) {
+          quantities.push(`${match[2]} ${itemName}`);
+        }
+      }
+    }
+
+    for (const line of rawLines) {
+      const lineMatch = line.match(/^[-*•]?\s*(\d+)?\s*([A-Za-z0-9&\- ]+?)(?:\s*[x×]\s*(\d+))?(?:\s*[:\-]\s*(\d+))?$/);
+      if (lineMatch) {
+        const itemName = lineMatch[2]?.trim();
+        if (itemName && !products.includes(itemName)) {
+          products.push(itemName);
+        }
+        if (lineMatch[1]) {
+          quantities.push(`${lineMatch[1]} ${itemName}`);
+        }
+        if (lineMatch[3]) {
+          quantities.push(`${lineMatch[3]} ${itemName}`);
+        }
+      }
+    }
+
+    const uniqueProducts = products.slice(0, 8);
+    const uniqueQuantities = quantities.length ? [...new Set(quantities)].join(", ") : undefined;
+
+    const details: ExtractedDetails = {
+      customerName,
+      products: uniqueProducts.length ? uniqueProducts : undefined,
+      quantities: uniqueQuantities,
+      budget,
+      deadline,
+      source,
+    };
+
+    const inquirySegments = [
+      source ? `Source: ${source}.` : undefined,
+      customerName ? `Customer: ${customerName}.` : undefined,
+      uniqueProducts.length ? `Products: ${uniqueProducts.join(", ")}.` : undefined,
+      uniqueQuantities ? `Quantities: ${uniqueQuantities}.` : undefined,
+      budget ? `Budget: ${budget}.` : undefined,
+      deadline ? `Deadline: ${deadline}.` : undefined,
+      "Customer request text:",
+      firstLines || "",
+    ].filter(Boolean);
+
+    return {
+      enquiryText: inquirySegments.join(" "),
+      details,
+    };
+  }
+
+  async function handleExtractedText(text: string, source?: string) {
+    const normalized = text.trim();
+    if (!normalized) {
+      return;
+    }
+    const parsed = parseStructuredDetails(normalized, source);
+    setExtractedFields(parsed.details);
+    setEnquiry(parsed.enquiryText);
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await createExecutionPlan(parsed.enquiryText);
+      setActivePlan(response.data);
+    } catch {
+      setError("Unable to generate an execution plan from the uploaded content.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleFileUpload(file: File) {
+    setUploadError(null);
+    setProcessingUpload(true);
+    try {
+      let extractedText = "";
+      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        extractedText = await extractTextFromPdf(file);
+      } else if (file.type.startsWith("image/") || /\.(png|jpe?g|bmp|gif|webp|avif)$/i.test(file.name)) {
+        extractedText = await extractTextFromImage(file);
+      } else {
+        extractedText = await readFileAsText(file);
+      }
+      await handleExtractedText(extractedText, file.name);
+    } catch (uploadErr) {
+      setUploadError(String(uploadErr instanceof Error ? uploadErr.message : "Failed to extract text from the uploaded file."));
+    } finally {
+      setProcessingUpload(false);
+    }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = Array.from(event.clipboardData.items || []);
+    const fileItem = items.find((item) => item.kind === "file");
+    if (fileItem) {
+      event.preventDefault();
+      const file = fileItem.getAsFile();
+      if (file) {
+        void handleFileUpload(file);
+      }
+      return;
+    }
+
+    const clipboardText = event.clipboardData.getData("text/plain")?.trim();
+    if (clipboardText) {
+      const looksLikeEmail = /@|Dear|Hi\s|Hello\s|Regards|Sent:/i.test(clipboardText);
+      if (looksLikeEmail && clipboardText.length > 40) {
+        event.preventDefault();
+        void handleExtractedText(clipboardText, "Pasted email");
+      }
+    }
+  }
+
+  async function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    await handleFileUpload(file);
+    event.target.value = "";
+  }
+
+  function triggerFilePicker() {
+    fileInputRef.current?.click();
+  }
+
+  function formatEstimatedCost(quote: string | undefined, margin: string | undefined) {
+    const quoteAmount = parseAmount(quote);
+    const marginMatch = typeof margin === "string" ? margin.match(/(\d+\.?\d*)/) : null;
+    if (quoteAmount === null || !marginMatch) {
+      return "TBD";
+    }
+    const marginValue = Number(marginMatch[1]) / 100;
+    if (!marginValue || marginValue >= 1) {
+      return "TBD";
+    }
+    const cost = quoteAmount / (1 + marginValue);
+    return `$${cost.toFixed(2)}`;
+  }
+
+  const estimatedCost = formatEstimatedCost(finalRecommendation?.estimated_quote, finalRecommendation?.expected_margin);
+  const isBusy = loading || processingUpload || refreshing || decisionInFlight || savingRecommendation;
   const selectedSnapshot = useMemo(
     () => executionHistory.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null,
     [executionHistory, selectedSnapshotId],
@@ -204,6 +471,8 @@ export default function AIOperationsCenter() {
   const completedSteps = useMemo(() => activeSteps.filter((step) => step.status === "completed").length, [activeSteps]);
   const runningStep = useMemo(() => activeSteps.find((step) => step.status === "running") ?? null, [activeSteps]);
   const completedThinking = thinkingPanel.length ? Math.min(thinkingCursor + 1, thinkingPanel.length) : 0;
+  const isStreaming = activePlan?.status === "running";
+  const streamingText = isStreaming ? (refreshing ? "Live streaming updates" : "Awaiting next execution update") : undefined;
 
   useEffect(() => {
     if (!executionHistory.length) {
@@ -262,10 +531,16 @@ export default function AIOperationsCenter() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    const trimmedEnquiry = enquiry.trim();
+    if (!trimmedEnquiry) {
+      setError("Please describe the customer enquiry before generating a plan.");
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
-      const response = await createExecutionPlan(enquiry);
+      const response = await createExecutionPlan(trimmedEnquiry);
       setActivePlan(response.data);
     } catch {
       setError("Unable to generate an AI operations plan right now.");
@@ -289,6 +564,70 @@ export default function AIOperationsCenter() {
       setRefreshing(false);
     }
   }
+
+  function buildRecommendationDraft(recommendation: FinalRecommendation | null) {
+    return {
+      supplier: recommendation?.supplier ?? "",
+      products: recommendation?.products.join("\n") ?? "",
+      estimated_quote: recommendation?.estimated_quote ?? "",
+      expected_margin: recommendation?.expected_margin ?? "",
+      delivery_timeline: recommendation?.delivery_timeline ?? "",
+    };
+  }
+
+  async function handleApprove(decision: "approved" | "rejected" | "changes_requested") {
+    if (!activePlan) {
+      return;
+    }
+
+    try {
+      setDecisionInFlight(true);
+      setError(null);
+      const result = await approveExecutionPlan(activePlan.id, decision, approvalNote || undefined);
+      setActivePlan(result.data);
+      setEditingRecommendation(false);
+      setApprovalNote("");
+    } catch {
+      setError("Unable to record the approval decision.");
+    } finally {
+      setDecisionInFlight(false);
+    }
+  }
+
+  async function handleSaveRecommendation() {
+    if (!activePlan) {
+      return;
+    }
+
+    try {
+      setSavingRecommendation(true);
+      setError(null);
+      const payload = {
+        supplier: recommendationDraft.supplier,
+        products: recommendationDraft.products
+          .split(/\r?\n/)
+          .map((product) => product.trim())
+          .filter(Boolean),
+        estimated_quote: recommendationDraft.estimated_quote,
+        expected_margin: recommendationDraft.expected_margin,
+        delivery_timeline: recommendationDraft.delivery_timeline,
+      };
+
+      const result = await updateFinalRecommendation(activePlan.id, payload);
+      setActivePlan(result.data);
+      setEditingRecommendation(false);
+    } catch {
+      setError("Unable to save the recommendation changes.");
+    } finally {
+      setSavingRecommendation(false);
+    }
+  }
+
+  useEffect(() => {
+    if (editingRecommendation && finalRecommendation) {
+      setRecommendationDraft(buildRecommendationDraft(finalRecommendation));
+    }
+  }, [editingRecommendation, finalRecommendation]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_22%),linear-gradient(180deg,#f8fbff_0%,#eef4ff_100%)] text-slate-900">
@@ -317,21 +656,69 @@ export default function AIOperationsCenter() {
               </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="rounded-[28px] border border-white/10 bg-white/8 p-5 backdrop-blur">
+            <form onSubmit={handleSubmit} className="relative rounded-[28px] border border-white/10 bg-white/8 p-5 backdrop-blur transition-shadow duration-200 shadow-[0_20px_60px_-32px_rgba(15,23,42,0.18)]">
+              {isBusy ? (
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-center rounded-[28px] border border-white/10 bg-slate-950/80 py-4 text-sm text-white backdrop-blur">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Processing AI plan updates...
+                </div>
+              ) : null}
               <label className="space-y-2">
                 <span className="text-sm font-medium text-slate-100">Customer Enquiry</span>
                 <textarea
                   required
                   value={enquiry}
                   onChange={(event) => setEnquiry(event.target.value)}
+                  onPaste={handlePaste}
                   rows={8}
-                  className="w-full rounded-3xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-cyan-400"
-                  placeholder="Describe the customer request, urgency, product constraints, supplier considerations, and the business outcome you want the AI to orchestrate."
+                  className="w-full rounded-3xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-white outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20"
+                  placeholder="Paste an email or upload a PDF / image / WhatsApp screenshot to auto-extract enquiry fields."
                 />
               </label>
 
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-wrap gap-2 text-xs text-slate-300">
+                  <button
+                    type="button"
+                    onClick={triggerFilePicker}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm text-white transition hover:border-cyan-400 hover:bg-white/15"
+                  >
+                    Upload PDF / image
+                  </button>
+                  <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-2">Paste email or screenshot text</span>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="hidden"
+                  onChange={handleFileInputChange}
+                />
+              </div>
+
+              {processingUpload ? (
+                <div className="mt-3 rounded-2xl border border-cyan-300 bg-cyan-50/20 px-4 py-3 text-sm text-cyan-900">
+                  Extracting enquiry from uploaded content...
+                </div>
+              ) : null}
+              {uploadError ? (
+                <div className="mt-3 rounded-2xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {uploadError}
+                </div>
+              ) : null}
+              {extractedFields ? (
+                <div className="mt-3 grid gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 lg:grid-cols-2">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400 lg:col-span-2">Extracted request details</div>
+                  {extractedFields.customerName ? <div className="rounded-3xl bg-white px-4 py-3 shadow-sm"><span className="font-semibold text-slate-950">Customer:</span> {extractedFields.customerName}</div> : null}
+                  {extractedFields.products?.length ? <div className="rounded-3xl bg-white px-4 py-3 shadow-sm"><span className="font-semibold text-slate-950">Products:</span> {extractedFields.products.join(", ")}</div> : null}
+                  {extractedFields.quantities ? <div className="rounded-3xl bg-white px-4 py-3 shadow-sm"><span className="font-semibold text-slate-950">Quantities:</span> {extractedFields.quantities}</div> : null}
+                  {extractedFields.budget ? <div className="rounded-3xl bg-white px-4 py-3 shadow-sm"><span className="font-semibold text-slate-950">Budget:</span> {extractedFields.budget}</div> : null}
+                  {extractedFields.deadline ? <div className="rounded-3xl bg-white px-4 py-3 shadow-sm"><span className="font-semibold text-slate-950">Deadline:</span> {extractedFields.deadline}</div> : null}
+                </div>
+              ) : null}
+
               <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                <Button type="submit" className="rounded-2xl px-5" disabled={loading}>
+                <Button type="submit" className="rounded-2xl px-5" disabled={loading || processingUpload}>
                   {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
                   Generate Operations Plan
                 </Button>
@@ -358,16 +745,32 @@ export default function AIOperationsCenter() {
           <div className="grid gap-6 px-6 py-8 xl:grid-cols-[1.02fr_0.98fr] xl:px-8">
             <div className="space-y-6">
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="rounded-[30px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_18px_60px_-40px_rgba(15,23,42,0.3)]">
-                <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-600">Execution Summary</p>
                     <h2 className="mt-1 text-2xl font-semibold text-slate-950">
                       {activePlan ? activePlan.execution_plan.intent : "Waiting for enquiry"}
                     </h2>
                   </div>
-                  <div className={`rounded-full px-3 py-1 text-xs font-semibold ${PLAN_STATUS_STYLES[planStatus].className}`}>
-                    {PLAN_STATUS_STYLES[planStatus].label}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className={`rounded-full px-3 py-1 text-xs font-semibold ${PLAN_STATUS_STYLES[planStatus].className}`}>
+                      {PLAN_STATUS_STYLES[planStatus].label}
+                    </div>
+                    {streamingText ? (
+                      <div className="rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold text-cyan-700">
+                        {streamingText}
+                      </div>
+                    ) : null}
                   </div>
+                </div>
+
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                  <motion.div
+                    className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${activeSteps.length ? (completedSteps / activeSteps.length) * 100 : 0}%` }}
+                    transition={{ duration: 0.8, ease: "easeOut" }}
+                  />
                 </div>
 
                 <div className="mt-5 grid gap-3 sm:grid-cols-4">
@@ -395,6 +798,15 @@ export default function AIOperationsCenter() {
                   </div>
                 </div>
 
+                <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100">
+                  <motion.div
+                    className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${thinkingPanel.length ? (completedThinking / thinkingPanel.length) * 100 : 0}%` }}
+                    transition={{ duration: 0.8, ease: "easeOut" }}
+                  />
+                </div>
+
                 <div className="mt-5 grid gap-3">
                   {thinkingPanel.length ? (
                     thinkingPanel.map((step, index) => {
@@ -402,15 +814,18 @@ export default function AIOperationsCenter() {
                       const isComplete = index < thinkingCursor;
                       const statusLabel = isActive ? "Running" : isComplete ? "Completed" : "Pending";
                       return (
-                        <div
+                        <motion.div
                           key={step.id}
-                          className={`rounded-[24px] border px-4 py-4 transition ${
-                            isActive
-                              ? "border-cyan-300 bg-cyan-50/70 shadow-sm"
-                              : isComplete
-                                ? "border-emerald-200 bg-emerald-50/40"
-                                : "border-slate-200 bg-white"
-                          }`}
+                          initial={{ opacity: 0, y: 12 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.35, delay: index * 0.05 }}
+                          whileHover={{ y: -2 }}
+                          className={`rounded-[24px] border px-4 py-4 transition ${isActive
+                            ? "border-cyan-300 bg-cyan-50/70 shadow-sm"
+                            : isComplete
+                              ? "border-emerald-200 bg-emerald-50/40"
+                              : "border-slate-200 bg-white"
+                            }`}
                         >
                           <div className="flex items-center gap-3">
                             <span className={`h-2.5 w-2.5 rounded-full ${isActive ? "animate-pulse bg-cyan-500" : isComplete ? "bg-emerald-500" : "bg-slate-300"}`} />
@@ -424,12 +839,13 @@ export default function AIOperationsCenter() {
                           </div>
                           <p className="mt-3 text-sm leading-6 text-slate-600">{step.detail}</p>
                           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                            <div
-                              className={`h-full rounded-full transition-all ${isActive ? "animate-pulse bg-gradient-to-r from-cyan-500 to-blue-500" : isComplete ? "w-full bg-emerald-500" : "w-1/3 bg-slate-300"}`}
-                              style={{ width: isActive ? "72%" : isComplete ? "100%" : "34%" }}
+                            <motion.div
+                              className={`h-full rounded-full ${isActive ? "bg-gradient-to-r from-cyan-500 to-blue-500" : isComplete ? "bg-emerald-500" : "bg-slate-300"}`}
+                              animate={{ width: isActive ? "72%" : isComplete ? "100%" : "28%" }}
+                              transition={{ duration: 0.6, ease: "easeOut" }}
                             />
                           </div>
-                        </div>
+                        </motion.div>
                       );
                     })
                   ) : (
@@ -481,6 +897,174 @@ export default function AIOperationsCenter() {
                     </div>
                   )}
                 </div>
+              </motion.div>
+
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="rounded-[30px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_18px_60px_-40px_rgba(15,23,42,0.3)]">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-600">Final recommendation</p>
+                    <h3 className="mt-1 text-2xl font-semibold text-slate-950">Decision summary card</h3>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Recommendation
+                  </div>
+                </div>
+
+                {finalRecommendation ? (
+                  <div className="mt-5 grid gap-4">
+                    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Supplier selected</div>
+                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.supplier}</div>
+                        </div>
+                        <div className="rounded-3xl bg-slate-100 px-4 py-4 shadow-sm">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Approval status</div>
+                          <div className="mt-2 text-lg font-semibold text-slate-950 capitalize">{approvalStatus}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Estimated Cost</div>
+                          <div className="mt-2 text-lg font-semibold text-slate-950">{estimatedCost}</div>
+                        </div>
+                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Estimated Margin</div>
+                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.expected_margin}</div>
+                        </div>
+                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Delivery time</div>
+                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.delivery_timeline}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Approval required</div>
+                          <div className="mt-2 text-sm text-slate-700">{finalRecommendation.approval_required}</div>
+                        </div>
+                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Confidence</div>
+                          <div className="mt-2 text-lg font-semibold text-slate-950">{recommendationConfidence}</div>
+                        </div>
+                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Supplier</div>
+                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.supplier}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                      <div className="text-sm font-semibold text-slate-900">Approval note</div>
+                      <p className="mt-2 text-sm text-slate-600">Add optional feedback for the recommendation before approving, rejecting, or requesting changes.</p>
+                      <textarea
+                        value={approvalNote}
+                        onChange={(event) => setApprovalNote(event.target.value)}
+                        rows={3}
+                        className="mt-3 w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                        placeholder="Example: Please confirm delivery window or adjust margin requirements."
+                      />
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap items-center gap-3">
+                      <Button type="button" className="rounded-2xl px-5" onClick={() => setEditingRecommendation(true)} disabled={decisionInFlight || savingRecommendation}>
+                        Modify
+                      </Button>
+                      <Button type="button" variant="secondary" className="rounded-2xl px-5" onClick={() => handleApprove("approved")} disabled={decisionInFlight || savingRecommendation}>
+                        Approve
+                      </Button>
+                      <Button type="button" variant="destructive" className="rounded-2xl px-5" onClick={() => handleApprove("rejected")} disabled={decisionInFlight || savingRecommendation}>
+                        Reject
+                      </Button>
+                    </div>
+
+                    {editingRecommendation ? (
+                      <div className="mt-5 rounded-[24px] border border-cyan-200 bg-cyan-50/20 p-5">
+                        <div className="mb-4 text-sm font-semibold text-cyan-900">Modify recommendation</div>
+                        <div className="grid gap-4">
+                          <label className="space-y-2 text-sm text-slate-700">
+                            <span>Supplier</span>
+                            <input
+                              value={recommendationDraft.supplier}
+                              onChange={(event) => setRecommendationDraft((current) => ({ ...current, supplier: event.target.value }))}
+                              className="w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                            />
+                          </label>
+                          <label className="space-y-2 text-sm text-slate-700">
+                            <span>Products (one per line)</span>
+                            <textarea
+                              value={recommendationDraft.products}
+                              onChange={(event) => setRecommendationDraft((current) => ({ ...current, products: event.target.value }))}
+                              rows={4}
+                              className="w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                            />
+                          </label>
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            <label className="space-y-2 text-sm text-slate-700">
+                              <span>Margin</span>
+                              <input
+                                value={recommendationDraft.expected_margin}
+                                onChange={(event) => setRecommendationDraft((current) => ({ ...current, expected_margin: event.target.value }))}
+                                className="w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                              />
+                            </label>
+                            <label className="space-y-2 text-sm text-slate-700">
+                              <span>Delivery timeline</span>
+                              <input
+                                value={recommendationDraft.delivery_timeline}
+                                onChange={(event) => setRecommendationDraft((current) => ({ ...current, delivery_timeline: event.target.value }))}
+                                className="w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                              />
+                            </label>
+                          </div>
+                          <label className="space-y-2 text-sm text-slate-700">
+                            <span>Estimated quote</span>
+                            <input
+                              value={recommendationDraft.estimated_quote}
+                              onChange={(event) => setRecommendationDraft((current) => ({ ...current, estimated_quote: event.target.value }))}
+                              className="w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="mt-5 flex flex-wrap gap-3">
+                          <Button type="button" className="rounded-2xl px-5" onClick={handleSaveRecommendation} disabled={savingRecommendation || decisionInFlight}>
+                            {savingRecommendation ? "Saving..." : "Save changes"}
+                          </Button>
+                          <Button type="button" variant="outline" className="rounded-2xl px-5" onClick={() => setEditingRecommendation(false)} disabled={savingRecommendation || decisionInFlight}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Products</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {finalRecommendation.products.length ? (
+                          finalRecommendation.products.map((product) => (
+                            <span key={product} className="rounded-full bg-white px-3 py-2 text-sm text-slate-700 shadow-sm">
+                              {product}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-slate-500">No products listed.</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Business reasoning</div>
+                      <p className="mt-3 text-sm leading-6 text-slate-600">{finalRecommendation.business_reasoning}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-[24px] border border-dashed border-slate-300 bg-slate-50/80 px-5 py-10 text-center text-sm text-slate-500">
+                    Final recommendation will appear here once the plan is generated.
+                  </div>
+                )}
               </motion.div>
 
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="rounded-[30px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_18px_60px_-40px_rgba(15,23,42,0.3)]">
@@ -640,7 +1224,13 @@ export default function AIOperationsCenter() {
                     activeSteps.map((step, index) => {
                       const style = STEP_STATUS_STYLES[step.status];
                       return (
-                        <div key={step.id} className={`rounded-[24px] border bg-slate-50 p-4 ${step.status === "running" ? "border-cyan-200" : "border-slate-200"}`}>
+                        <motion.div
+                          key={step.id}
+                          initial={{ opacity: 0, x: 12 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ duration: 0.35, delay: index * 0.04 }}
+                          className={`rounded-[24px] border bg-slate-50 p-4 ${step.status === "running" ? "border-cyan-200" : "border-slate-200"}`}
+                        >
                           <div className="flex items-start gap-4">
                             <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-white">
                               {step.status === "completed" ? (
@@ -687,7 +1277,7 @@ export default function AIOperationsCenter() {
                               </div>
                             </div>
                           </div>
-                        </div>
+                        </motion.div>
                       );
                     })
                   ) : (
