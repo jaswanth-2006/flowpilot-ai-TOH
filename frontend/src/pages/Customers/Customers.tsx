@@ -414,6 +414,7 @@ export default function Customers() {
               </div>
             </div>
           </div>
+        </main>
       </div>
 
       {dialogOpen ? (

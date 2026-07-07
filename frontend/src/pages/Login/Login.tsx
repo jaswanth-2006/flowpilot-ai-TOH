@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 export default function Login() {
@@ -6,6 +6,12 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (window.localStorage.getItem("flowpilot-auth") === "true") {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [navigate]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -24,7 +30,8 @@ export default function Login() {
     }
 
     setError(null);
-    navigate("/dashboard");
+    window.localStorage.setItem("flowpilot-auth", "true");
+    navigate("/dashboard", { replace: true });
   }
 
   return (

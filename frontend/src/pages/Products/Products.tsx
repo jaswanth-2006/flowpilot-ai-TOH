@@ -446,6 +446,7 @@ export default function Products() {
               </div>
             </div>
           </div>
+        </main>
       </div>
 
       {dialogOpen ? (
@@ -553,3 +554,4 @@ export default function Products() {
     </div>
   );
 }
+

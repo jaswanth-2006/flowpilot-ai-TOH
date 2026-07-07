@@ -19,10 +19,10 @@ const menu = [
   { icon: Users, label: "Customers", to: "/customers" },
   { icon: Package, label: "Products", to: "/products" },
   { icon: Truck, label: "Suppliers", to: "/suppliers" },
-  { icon: FileText, label: "Quotations" },
-  { icon: CheckCircle, label: "Approvals" },
-  { icon: BarChart3, label: "Analytics" },
-  { icon: Settings, label: "Settings" },
+  { icon: FileText, label: "Quotations", to: "/quotations" },
+  { icon: CheckCircle, label: "Approvals", to: "/approvals" },
+  { icon: BarChart3, label: "Analytics", to: "/analytics" },
+  { icon: Settings, label: "Settings", to: "/settings" },
 ];
 
 export default function Sidebar() {

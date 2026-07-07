@@ -429,6 +429,7 @@ export default function Suppliers() {
               </div>
             </div>
           </div>
+        </main>
       </div>
 
       {dialogOpen ? (

@@ -1,18 +1,29 @@
-import { Bell, ChevronRight, Search } from "lucide-react";
-import { useLocation } from "react-router-dom";
+import { Bell, ChevronRight, LogOut, Search } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 const TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
   "/customers": "Customers",
   "/products": "Products",
   "/suppliers": "Suppliers",
+  "/workflows": "Workflows",
   "/ai-operations-center": "AI Operations Center",
+  "/quotations": "Quotations",
+  "/approvals": "Approvals",
+  "/analytics": "Analytics",
+  "/settings": "Settings",
   "/execution-engine": "AI Operations Center",
 };
 
 export default function Navbar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const title = TITLES[location.pathname] ?? "FlowPilot AI";
+
+  function handleLogout() {
+    window.localStorage.removeItem("flowpilot-auth");
+    navigate("/login", { replace: true });
+  }
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/75 px-6 py-4 backdrop-blur-xl lg:px-8">
@@ -42,6 +53,15 @@ export default function Navbar() {
             className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
           >
             <Bell className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex h-10 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-sm text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+          >
+            <LogOut className="h-4 w-4" />
+            Logout
           </button>
 
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-slate-950 to-blue-700 text-sm font-semibold text-white shadow-lg shadow-slate-900/20">

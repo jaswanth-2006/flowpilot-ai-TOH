@@ -2,11 +2,15 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardE
 import {
   AlertTriangle,
   ArrowRight,
+  BadgeCheck,
   CheckCircle2,
   Clock3,
+  FileText,
   Loader2,
   RefreshCcw,
+  ShieldCheck,
   Sparkles,
+  TrendingUp,
   WandSparkles,
 } from "lucide-react";
 import ReactFlow, {
@@ -191,6 +195,77 @@ function StatCard({ label, value, sublabel }: { label: string; value: string; su
   );
 }
 
+function parseQuoteAmount(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+  const numeric = value.replace(/[^0-9.]/g, "");
+  const amount = Number(numeric);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function parseLeadDays(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+  const raw = value.toLowerCase();
+  const match = raw.match(/(\d+)/);
+  if (!match) {
+    return null;
+  }
+  const days = Number(match[1]);
+  if (raw.includes("week")) {
+    return days * 7;
+  }
+  if (raw.includes("day")) {
+    return days;
+  }
+  if (raw.includes("month")) {
+    return days * 30;
+  }
+  return days;
+}
+
+function getConfidenceProfile(finalRecommendation: FinalRecommendation | null, planStatus: PlanStatus, approvalStatus: string) {
+  const quoteAmount = parseQuoteAmount(finalRecommendation?.estimated_quote);
+  const marginValue = Number(finalRecommendation?.expected_margin?.match(/(\d+\.?\d*)/)?.[1] ?? 0);
+  const deliveryDays = parseLeadDays(finalRecommendation?.delivery_timeline);
+  const reasoningLength = finalRecommendation?.business_reasoning?.length ?? 0;
+  const approvalClear = approvalStatus === "approved" || approvalStatus === "pending";
+
+  let score = 64;
+  if (quoteAmount && quoteAmount > 0) {
+    score += 8;
+  }
+  if (marginValue >= 16) {
+    score += 8;
+  }
+  if (deliveryDays && deliveryDays <= 10) {
+    score += 8;
+  }
+  if (reasoningLength > 140) {
+    score += 6;
+  }
+  if (planStatus === "completed") {
+    score += 4;
+  }
+  if (approvalClear) {
+    score += 2;
+  }
+  if (!finalRecommendation?.supplier || finalRecommendation.supplier.toLowerCase().includes("not found")) {
+    score -= 18;
+  }
+  score = Math.max(45, Math.min(97, score));
+
+  if (score >= 86) {
+    return { score, label: "High", tone: "bg-emerald-50 text-emerald-700", detail: "This recommendation is strongly grounded in business context and delivery viability." };
+  }
+  if (score >= 72) {
+    return { score, label: "Strong", tone: "bg-cyan-50 text-cyan-700", detail: "The proposal is credible and ready for human review with light validation." };
+  }
+  return { score, label: "Medium", tone: "bg-amber-50 text-amber-700", detail: "The plan is directionally sound but would benefit from a reviewer check before launch." };
+}
+
 export default function AIOperationsCenter() {
   const [enquiry, setEnquiry] = useState("");
   const [activePlan, setActivePlan] = useState<ExecutionPlanRecord | null>(null);
@@ -221,8 +296,12 @@ export default function AIOperationsCenter() {
   const executionHistory = activePlan?.execution_plan.execution_history ?? [];
   const finalRecommendation = activePlan?.execution_plan.final_recommendation as FinalRecommendation | null;
   const approvalStatus = activePlan?.execution_plan.approval_status ?? "pending";
-  const recommendationConfidence =
-    finalRecommendation?.confidence_score ?? decisionPanel[0]?.confidence ?? "Medium";
+  const planStatus = activePlan?.status ?? "pending";
+  const confidenceProfile = useMemo(
+    () => getConfidenceProfile(finalRecommendation, planStatus, approvalStatus),
+    [approvalStatus, finalRecommendation, planStatus],
+  );
+  const recommendationConfidence = confidenceProfile.label;
 
   function parseAmount(value: string | undefined): number | null {
     if (!value) {
@@ -443,21 +522,6 @@ export default function AIOperationsCenter() {
     fileInputRef.current?.click();
   }
 
-  function formatEstimatedCost(quote: string | undefined, margin: string | undefined) {
-    const quoteAmount = parseAmount(quote);
-    const marginMatch = typeof margin === "string" ? margin.match(/(\d+\.?\d*)/) : null;
-    if (quoteAmount === null || !marginMatch) {
-      return "TBD";
-    }
-    const marginValue = Number(marginMatch[1]) / 100;
-    if (!marginValue || marginValue >= 1) {
-      return "TBD";
-    }
-    const cost = quoteAmount / (1 + marginValue);
-    return `$${cost.toFixed(2)}`;
-  }
-
-  const estimatedCost = formatEstimatedCost(finalRecommendation?.estimated_quote, finalRecommendation?.expected_margin);
   const isBusy = loading || processingUpload || refreshing || decisionInFlight || savingRecommendation;
   const selectedSnapshot = useMemo(
     () => executionHistory.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null,
@@ -465,7 +529,6 @@ export default function AIOperationsCenter() {
   );
   const activeSteps = selectedSnapshot?.workflow_state ?? activePlan?.execution_plan.workflow_steps ?? [];
   const visibleSnapshot = selectedSnapshot ?? executionHistory[executionHistory.length - 1] ?? null;
-  const planStatus = activePlan?.status ?? "pending";
   const workflowGraph = useMemo(() => buildWorkflowGraph(activeSteps), [activeSteps]);
   const nodeTypes = useMemo(() => ({ workflowStep: WorkflowNode }), []);
   const completedSteps = useMemo(() => activeSteps.filter((step) => step.status === "completed").length, [activeSteps]);
@@ -563,6 +626,84 @@ export default function AIOperationsCenter() {
     } finally {
       setRefreshing(false);
     }
+  }
+
+  function generateQuotationPdf() {
+    if (!finalRecommendation || !activePlan) {
+      return;
+    }
+
+    const printWindow = window.open("", "_blank", "width=910,height=1200");
+    if (!printWindow) {
+      setError("Please allow popups so the quotation can be exported as a PDF.");
+      return;
+    }
+
+    const quoteAmount = parseAmount(finalRecommendation.estimated_quote);
+    const confidenceLabel = confidenceProfile.label;
+    const quoteHtml = `<!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>FlowPilot Quotation</title>
+          <style>
+            body { font-family: Inter, Arial, sans-serif; margin: 0; padding: 24px; color: #0f172a; background: #f8fafc; }
+            .card { background: white; border-radius: 24px; padding: 28px; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.12); }
+            .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+            .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #ecfeff; color: #0f766e; font-weight: 700; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; }
+            .meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+            .box { border: 1px solid #e2e8f0; border-radius: 16px; padding: 12px 14px; }
+            .label { font-size: 11px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #64748b; margin-bottom: 6px; }
+            .value { font-size: 15px; font-weight: 700; color: #0f172a; }
+            .section { margin-top: 18px; }
+            .items { display: flex; flex-wrap: wrap; gap: 8px; }
+            .pill { border-radius: 999px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 13px; color: #334155; }
+            .footer { margin-top: 22px; font-size: 13px; color: #475569; line-height: 1.6; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="header">
+              <div>
+                <div class="badge">FlowPilot AI Quotation</div>
+                <h1 style="margin: 10px 0 4px; font-size: 24px;">${finalRecommendation.supplier}</h1>
+                <div style="font-size: 13px; color: #64748b;">Prepared for ${activePlan.enquiry}</div>
+              </div>
+              <div style="text-align: right;">
+                <div class="badge">${confidenceLabel} confidence</div>
+                <div style="margin-top: 8px; font-size: 14px; font-weight: 700; color: #0f172a;">${finalRecommendation.expected_margin}</div>
+              </div>
+            </div>
+            <div class="meta">
+              <div class="box"><div class="label">Estimated quote</div><div class="value">${finalRecommendation.estimated_quote || "TBD"}</div></div>
+              <div class="box"><div class="label">Estimated cost</div><div class="value">${quoteAmount ? `$${quoteAmount.toFixed(2)}` : "TBD"}</div></div>
+              <div class="box"><div class="label">Delivery</div><div class="value">${finalRecommendation.delivery_timeline}</div></div>
+              <div class="box"><div class="label">Approval</div><div class="value">${finalRecommendation.approval_required}</div></div>
+            </div>
+            <div class="section">
+              <div class="label">Recommended products</div>
+              <div class="items">
+                ${(finalRecommendation.products || []).map((product) => `<span class="pill">${product}</span>`).join("")}
+              </div>
+            </div>
+            <div class="section">
+              <div class="label">Business rationale</div>
+              <div style="font-size: 14px; line-height: 1.7; color: #334155;">${finalRecommendation.business_reasoning}</div>
+            </div>
+            <div class="footer">
+              This quotation was generated directly from the AI Operations Center recommendation workflow and is intended for executive review and approval.
+            </div>
+          </div>
+        </body>
+      </html>`;
+
+    printWindow.document.write(quoteHtml);
+    printWindow.document.close();
+    setTimeout(() => {
+      printWindow.focus();
+      printWindow.print();
+      printWindow.close();
+    }, 300);
   }
 
   function buildRecommendationDraft(recommendation: FinalRecommendation | null) {
@@ -809,45 +950,68 @@ export default function AIOperationsCenter() {
 
                 <div className="mt-5 grid gap-3">
                   {thinkingPanel.length ? (
-                    thinkingPanel.map((step, index) => {
-                      const isActive = index === thinkingCursor;
-                      const isComplete = index < thinkingCursor;
-                      const statusLabel = isActive ? "Running" : isComplete ? "Completed" : "Pending";
-                      return (
-                        <motion.div
-                          key={step.id}
-                          initial={{ opacity: 0, y: 12 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.35, delay: index * 0.05 }}
-                          whileHover={{ y: -2 }}
-                          className={`rounded-[24px] border px-4 py-4 transition ${isActive
-                            ? "border-cyan-300 bg-cyan-50/70 shadow-sm"
-                            : isComplete
-                              ? "border-emerald-200 bg-emerald-50/40"
-                              : "border-slate-200 bg-white"
-                            }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className={`h-2.5 w-2.5 rounded-full ${isActive ? "animate-pulse bg-cyan-500" : isComplete ? "bg-emerald-500" : "bg-slate-300"}`} />
-                            <div>
-                              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Thinking</div>
-                              <div className="text-base font-semibold text-slate-950">{step.label}</div>
+                    <>
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.25 }}
+                        className="rounded-[24px] border border-cyan-200 bg-gradient-to-br from-cyan-50 via-white to-slate-50 p-4"
+                      >
+                        <div className="flex items-center gap-2 text-sm font-semibold text-cyan-700">
+                          <WandSparkles className="h-4 w-4" />
+                          Current business signal
+                        </div>
+                        <p className="mt-3 text-sm leading-7 text-slate-700">
+                          {thinkingPanel[thinkingCursor]
+                            ? `${thinkingPanel[thinkingCursor].label}: ${thinkingPanel[thinkingCursor].detail}`
+                            : "The engine is preparing an explainable recommendation for the customer request."}
+                        </p>
+                        <p className="mt-3 text-sm leading-7 text-slate-600">
+                          {finalRecommendation?.business_reasoning
+                            ? `Why this matters: ${finalRecommendation.business_reasoning}`
+                            : "The reasoning is being grounded in supplier availability, delivery timing, and commercial fit."}
+                        </p>
+                      </motion.div>
+                      {thinkingPanel.map((step, index) => {
+                        const isActive = index === thinkingCursor;
+                        const isComplete = index < thinkingCursor;
+                        const statusLabel = isActive ? "Running" : isComplete ? "Completed" : "Pending";
+                        return (
+                          <motion.div
+                            key={step.id}
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.35, delay: index * 0.05 }}
+                            whileHover={{ y: -2 }}
+                            className={`rounded-[24px] border px-4 py-4 transition ${isActive
+                              ? "border-cyan-300 bg-cyan-50/70 shadow-sm"
+                              : isComplete
+                                ? "border-emerald-200 bg-emerald-50/40"
+                                : "border-slate-200 bg-white"
+                              }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className={`h-2.5 w-2.5 rounded-full ${isActive ? "animate-pulse bg-cyan-500" : isComplete ? "bg-emerald-500" : "bg-slate-300"}`} />
+                              <div>
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Thinking</div>
+                                <div className="text-base font-semibold text-slate-950">{step.label}</div>
+                              </div>
+                              <div className={`ml-auto rounded-full px-3 py-1 text-xs font-semibold ${isActive ? "bg-cyan-100 text-cyan-700" : isComplete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                                {statusLabel}
+                              </div>
                             </div>
-                            <div className={`ml-auto rounded-full px-3 py-1 text-xs font-semibold ${isActive ? "bg-cyan-100 text-cyan-700" : isComplete ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                              {statusLabel}
+                            <p className="mt-3 text-sm leading-6 text-slate-600">{step.detail}</p>
+                            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                              <motion.div
+                                className={`h-full rounded-full ${isActive ? "bg-gradient-to-r from-cyan-500 to-blue-500" : isComplete ? "bg-emerald-500" : "bg-slate-300"}`}
+                                animate={{ width: isActive ? "72%" : isComplete ? "100%" : "28%" }}
+                                transition={{ duration: 0.6, ease: "easeOut" }}
+                              />
                             </div>
-                          </div>
-                          <p className="mt-3 text-sm leading-6 text-slate-600">{step.detail}</p>
-                          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                            <motion.div
-                              className={`h-full rounded-full ${isActive ? "bg-gradient-to-r from-cyan-500 to-blue-500" : isComplete ? "bg-emerald-500" : "bg-slate-300"}`}
-                              animate={{ width: isActive ? "72%" : isComplete ? "100%" : "28%" }}
-                              transition={{ duration: 0.6, ease: "easeOut" }}
-                            />
-                          </div>
-                        </motion.div>
-                      );
-                    })
+                          </motion.div>
+                        );
+                      })}
+                    </>
                   ) : (
                     <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50/80 px-5 py-10 text-center text-sm text-slate-500">
                       Submit a customer enquiry to animate the AI thinking panel.
@@ -913,50 +1077,59 @@ export default function AIOperationsCenter() {
 
                 {finalRecommendation ? (
                   <div className="mt-5 grid gap-4">
-                    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
-                      <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-[32px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950 p-6 text-white shadow-[0_20px_70px_-40px_rgba(15,23,42,0.72)]">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Supplier selected</div>
-                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.supplier}</div>
+                          <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-100">
+                            <BadgeCheck className="h-3.5 w-3.5" />
+                            Executive recommendation
+                          </div>
+                          <h4 className="mt-4 text-2xl font-semibold">{finalRecommendation.supplier}</h4>
+                          <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">
+                            {finalRecommendation.business_reasoning}
+                          </p>
                         </div>
-                        <div className="rounded-3xl bg-slate-100 px-4 py-4 shadow-sm">
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Approval status</div>
-                          <div className="mt-2 text-lg font-semibold text-slate-950 capitalize">{approvalStatus}</div>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Estimated Cost</div>
-                          <div className="mt-2 text-lg font-semibold text-slate-950">{estimatedCost}</div>
-                        </div>
-                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Estimated Margin</div>
-                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.expected_margin}</div>
-                        </div>
-                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Delivery time</div>
-                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.delivery_timeline}</div>
+                        <div className={`rounded-full px-3 py-1 text-sm font-semibold ${confidenceProfile.tone}`}>
+                          {confidenceProfile.score}% {recommendationConfidence} confidence
                         </div>
                       </div>
 
-                      <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Approval required</div>
-                          <div className="mt-2 text-sm text-slate-700">{finalRecommendation.approval_required}</div>
+                      <div className="mt-6 grid gap-3 md:grid-cols-3">
+                        <div className="rounded-[22px] border border-white/10 bg-white/10 p-4 backdrop-blur">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-300">Estimated quote</div>
+                          <div className="mt-2 text-xl font-semibold">{finalRecommendation.estimated_quote}</div>
                         </div>
-                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Confidence</div>
-                          <div className="mt-2 text-lg font-semibold text-slate-950">{recommendationConfidence}</div>
+                        <div className="rounded-[22px] border border-white/10 bg-white/10 p-4 backdrop-blur">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-300">Estimated margin</div>
+                          <div className="mt-2 text-xl font-semibold">{finalRecommendation.expected_margin}</div>
                         </div>
-                        <div className="rounded-3xl bg-white px-4 py-4 shadow-sm">
-                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Supplier</div>
-                          <div className="mt-2 text-lg font-semibold text-slate-950">{finalRecommendation.supplier}</div>
+                        <div className="rounded-[22px] border border-white/10 bg-white/10 p-4 backdrop-blur">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-300">Delivery</div>
+                          <div className="mt-2 text-xl font-semibold">{finalRecommendation.delivery_timeline}</div>
                         </div>
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap items-center gap-3">
+                        <Button type="button" className="rounded-2xl px-5" onClick={() => setEditingRecommendation(true)} disabled={decisionInFlight || savingRecommendation}>
+                          <FileText className="mr-2 h-4 w-4" />
+                          Modify
+                        </Button>
+                        <Button type="button" variant="secondary" className="rounded-2xl px-5 bg-white text-slate-950 hover:bg-slate-100" onClick={() => handleApprove("approved")} disabled={decisionInFlight || savingRecommendation}>
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                          Approve
+                        </Button>
+                        <Button type="button" variant="destructive" className="rounded-2xl px-5" onClick={() => handleApprove("rejected")} disabled={decisionInFlight || savingRecommendation}>
+                          <ShieldCheck className="mr-2 h-4 w-4" />
+                          Reject
+                        </Button>
+                        <Button type="button" variant="outline" className="rounded-2xl border-white/20 bg-white/10 px-5 text-white hover:bg-white/20" onClick={generateQuotationPdf} disabled={decisionInFlight || savingRecommendation}>
+                          <TrendingUp className="mr-2 h-4 w-4" />
+                          Generate quote PDF
+                        </Button>
                       </div>
                     </div>
 
-                    <div className="mt-5 rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
                       <div className="text-sm font-semibold text-slate-900">Approval note</div>
                       <p className="mt-2 text-sm text-slate-600">Add optional feedback for the recommendation before approving, rejecting, or requesting changes.</p>
                       <textarea
@@ -966,18 +1139,6 @@ export default function AIOperationsCenter() {
                         className="mt-3 w-full rounded-3xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none"
                         placeholder="Example: Please confirm delivery window or adjust margin requirements."
                       />
-                    </div>
-
-                    <div className="mt-5 flex flex-wrap items-center gap-3">
-                      <Button type="button" className="rounded-2xl px-5" onClick={() => setEditingRecommendation(true)} disabled={decisionInFlight || savingRecommendation}>
-                        Modify
-                      </Button>
-                      <Button type="button" variant="secondary" className="rounded-2xl px-5" onClick={() => handleApprove("approved")} disabled={decisionInFlight || savingRecommendation}>
-                        Approve
-                      </Button>
-                      <Button type="button" variant="destructive" className="rounded-2xl px-5" onClick={() => handleApprove("rejected")} disabled={decisionInFlight || savingRecommendation}>
-                        Reject
-                      </Button>
                     </div>
 
                     {editingRecommendation ? (
