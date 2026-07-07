@@ -25,6 +25,7 @@ import { Button } from "../../components/ui/button";
 import {
   createExecutionPlan,
   getExecutionPlan,
+  getApiErrorMessage,
   type ExecutionPlanRecord,
   type PlanStatus,
   type ReplayFrameType,
@@ -245,8 +246,8 @@ export default function ExecutionEngine() {
         setRefreshing(true);
         const updatedPlan = await getExecutionPlan(activePlan.id);
         setActivePlan(updatedPlan);
-      } catch {
-        setError("Unable to refresh the execution replay.");
+      } catch (requestError) {
+        setError(getApiErrorMessage(requestError, "Unable to refresh the execution replay."));
       } finally {
         setRefreshing(false);
       }
@@ -258,13 +259,19 @@ export default function ExecutionEngine() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    const trimmedEnquiry = enquiry.trim();
+    if (!trimmedEnquiry) {
+      setError("Please describe the customer enquiry before generating a plan.");
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
-      const response = await createExecutionPlan(enquiry);
+      const response = await createExecutionPlan(trimmedEnquiry);
       setActivePlan(response.data);
-    } catch {
-      setError("Unable to generate an execution plan right now.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to generate an execution plan right now."));
     } finally {
       setLoading(false);
     }
@@ -279,8 +286,8 @@ export default function ExecutionEngine() {
       setRefreshing(true);
       const updatedPlan = await getExecutionPlan(activePlan.id);
       setActivePlan(updatedPlan);
-    } catch {
-      setError("Unable to refresh the execution replay.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to refresh the execution replay."));
     } finally {
       setRefreshing(false);
     }

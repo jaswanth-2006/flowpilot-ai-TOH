@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 
 from app.schemas.customer import CustomerCreate, CustomerUpdate
 from app.services.customer_service import (
@@ -17,7 +17,7 @@ router = APIRouter(
 def get_customers():
     return list_customers()
 
-@router.post("/")
+@router.post("/", status_code=status.HTTP_201_CREATED)
 def create_customer(customer: CustomerCreate):
     return create_customer_service(customer)
 

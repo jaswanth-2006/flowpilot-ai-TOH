@@ -26,10 +26,13 @@ import ReactFlow, {
 import { motion } from "framer-motion";
 import "reactflow/dist/style.css";
 
+import Sidebar from "../../components/layout/Sidebar";
+import Navbar from "../../components/layout/Navbar";
 import { Button } from "../../components/ui/button";
 import {
   createExecutionPlan,
   getExecutionPlan,
+  getApiErrorMessage,
   approveExecutionPlan,
   updateFinalRecommendation,
   type BusinessMemoryItem,
@@ -338,15 +341,15 @@ export default function AIOperationsCenter() {
 
   async function extractTextFromImage(file: File): Promise<string> {
     const tesseract: any = await import("tesseract.js");
-    const worker = await tesseract.createWorker(undefined, undefined, { logger: () => null });
-    await worker.load();
-    await worker.loadLanguage("eng");
-    await worker.initialize("eng");
+    const worker = await tesseract.createWorker("eng", undefined, { logger: () => null });
     const blobUrl = URL.createObjectURL(file);
-    const { data } = await worker.recognize(blobUrl);
-    URL.revokeObjectURL(blobUrl);
-    await worker.terminate();
-    return data.text;
+    try {
+      const { data } = await worker.recognize(blobUrl);
+      return data.text;
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+      await worker.terminate();
+    }
   }
 
   function parseStructuredDetails(text: string, source?: string): { enquiryText: string; details: ExtractedDetails } {
@@ -460,8 +463,8 @@ export default function AIOperationsCenter() {
       setError(null);
       const response = await createExecutionPlan(parsed.enquiryText);
       setActivePlan(response.data);
-    } catch {
-      setError("Unable to generate an execution plan from the uploaded content.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to generate an execution plan from the uploaded content."));
     } finally {
       setLoading(false);
     }
@@ -581,8 +584,8 @@ export default function AIOperationsCenter() {
         setRefreshing(true);
         const updatedPlan = await getExecutionPlan(activePlan.id);
         setActivePlan(updatedPlan);
-      } catch {
-        setError("Unable to refresh the AI Operations Center replay.");
+      } catch (requestError) {
+        setError(getApiErrorMessage(requestError, "Unable to refresh the AI Operations Center replay."));
       } finally {
         setRefreshing(false);
       }
@@ -605,8 +608,8 @@ export default function AIOperationsCenter() {
       setError(null);
       const response = await createExecutionPlan(trimmedEnquiry);
       setActivePlan(response.data);
-    } catch {
-      setError("Unable to generate an AI operations plan right now.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to generate an AI operations plan right now."));
     } finally {
       setLoading(false);
     }
@@ -621,8 +624,8 @@ export default function AIOperationsCenter() {
       setRefreshing(true);
       const updatedPlan = await getExecutionPlan(activePlan.id);
       setActivePlan(updatedPlan);
-    } catch {
-      setError("Unable to refresh the AI Operations Center replay.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to refresh the AI Operations Center replay."));
     } finally {
       setRefreshing(false);
     }
@@ -728,8 +731,8 @@ export default function AIOperationsCenter() {
       setActivePlan(result.data);
       setEditingRecommendation(false);
       setApprovalNote("");
-    } catch {
-      setError("Unable to record the approval decision.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to record the approval decision."));
     } finally {
       setDecisionInFlight(false);
     }
@@ -757,8 +760,8 @@ export default function AIOperationsCenter() {
       const result = await updateFinalRecommendation(activePlan.id, payload);
       setActivePlan(result.data);
       setEditingRecommendation(false);
-    } catch {
-      setError("Unable to save the recommendation changes.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to save the recommendation changes."));
     } finally {
       setSavingRecommendation(false);
     }
@@ -771,8 +774,11 @@ export default function AIOperationsCenter() {
   }, [editingRecommendation, finalRecommendation]);
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.14),transparent_22%),linear-gradient(180deg,#f8fbff_0%,#eef4ff_100%)] text-slate-900">
-      <div className="mx-auto max-w-[1600px] px-6 py-8 lg:px-10">
+    <div className="flex min-h-screen bg-[#f5f7fb] text-slate-900">
+      <Sidebar />
+      <div className="flex flex-1 flex-col">
+        <Navbar />
+        <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-8 lg:px-10">
         <div className="overflow-hidden rounded-[36px] border border-slate-200/80 bg-white/90 shadow-[0_28px_90px_-50px_rgba(15,23,42,0.4)] backdrop-blur-xl">
           <div className="grid gap-6 border-b border-slate-100 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.18),transparent_25%),linear-gradient(135deg,#081123_0%,#0f172a_45%,#11203a_100%)] px-6 py-8 text-white lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
             <div>
@@ -1475,6 +1481,7 @@ export default function AIOperationsCenter() {
             </div>
           </div>
         </div>
+        </main>
       </div>
     </div>
   );

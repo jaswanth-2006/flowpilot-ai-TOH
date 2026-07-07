@@ -1,5 +1,6 @@
 import { Bell, ChevronRight, LogOut, Search } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { getCurrentUser, logout } from "../../services/auth";
 
 const TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -19,9 +20,10 @@ export default function Navbar() {
   const location = useLocation();
   const navigate = useNavigate();
   const title = TITLES[location.pathname] ?? "FlowPilot AI";
+  const currentUser = getCurrentUser();
 
   function handleLogout() {
-    window.localStorage.removeItem("flowpilot-auth");
+    logout();
     navigate("/login", { replace: true });
   }
 
@@ -65,7 +67,7 @@ export default function Navbar() {
           </button>
 
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-slate-950 to-blue-700 text-sm font-semibold text-white shadow-lg shadow-slate-900/20">
-            A
+            {(currentUser?.name || currentUser?.email || "A").slice(0, 1).toUpperCase()}
           </div>
         </div>
       </div>

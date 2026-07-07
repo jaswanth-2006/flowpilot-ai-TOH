@@ -18,6 +18,7 @@ import { Button } from "../../components/ui/button";
 import {
   createSupplier,
   deleteSupplier,
+  getApiErrorMessage,
   getSuppliers,
   updateSupplier,
   type Supplier,
@@ -110,9 +111,9 @@ export default function Suppliers() {
         if (mounted) {
           setSuppliers(data);
         }
-      } catch {
+      } catch (requestError) {
         if (mounted) {
-          setError("Failed to load suppliers. Please try again.");
+          setError(getApiErrorMessage(requestError, "Failed to load suppliers. Please try again."));
         }
       } finally {
         if (mounted) {
@@ -224,8 +225,8 @@ export default function Suppliers() {
 
       await refreshSuppliers();
       closeDialog(true);
-    } catch {
-      setError("Unable to save the supplier right now.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to save the supplier right now."));
     } finally {
       setSubmitting(false);
     }
@@ -242,8 +243,8 @@ export default function Suppliers() {
       await deleteSupplier(deleteTarget.id);
       await refreshSuppliers();
       setDeleteTarget(null);
-    } catch {
-      setError("Unable to delete the supplier right now.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to delete the supplier right now."));
     } finally {
       setSubmitting(false);
     }

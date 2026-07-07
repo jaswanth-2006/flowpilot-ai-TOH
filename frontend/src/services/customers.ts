@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getApiErrorMessage } from "./apiError";
 
 export type Customer = {
   id?: string;
@@ -50,3 +51,5 @@ export async function deleteCustomer(customerId: string) {
   const response = await api.delete<{ message: string; data: Customer[] }>(`/customers/${customerId}`);
   return response.data;
 }
+
+export { getApiErrorMessage };

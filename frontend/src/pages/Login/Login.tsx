@@ -1,14 +1,17 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { isAuthenticated, signIn, signUp } from "../../services/auth";
 
 export default function Login() {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (window.localStorage.getItem("flowpilot-auth") === "true") {
+    if (isAuthenticated()) {
       navigate("/dashboard", { replace: true });
     }
   }, [navigate]);
@@ -29,9 +32,22 @@ export default function Login() {
       return;
     }
 
-    setError(null);
-    window.localStorage.setItem("flowpilot-auth", "true");
-    navigate("/dashboard", { replace: true });
+    if (mode === "signup" && trimmedPassword.length < 6) {
+      setError("Password must be at least 6 characters for sign up.");
+      return;
+    }
+
+    try {
+      setError(null);
+      if (mode === "signup") {
+        signUp(trimmedEmail, trimmedPassword, name);
+      } else {
+        signIn(trimmedEmail, trimmedPassword);
+      }
+      navigate("/dashboard", { replace: true });
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Authentication failed. Please try again.");
+    }
   }
 
   return (
@@ -66,11 +82,25 @@ export default function Login() {
         <div className="flex items-center justify-center px-6 py-10 sm:px-10">
           <div className="w-full max-w-md">
             <div className="mb-8">
-              <h2 className="text-3xl font-semibold tracking-tight text-slate-950">Welcome back</h2>
-              <p className="mt-2 text-sm text-slate-500">Sign in to continue to FlowPilot AI.</p>
+              <h2 className="text-3xl font-semibold tracking-tight text-slate-950">
+                {mode === "login" ? "Welcome back" : "Create account"}
+              </h2>
+              <p className="mt-2 text-sm text-slate-500">
+                {mode === "login" ? "Sign in to continue to FlowPilot AI." : "Sign up to start using FlowPilot AI."}
+              </p>
             </div>
 
             <form className="space-y-4" onSubmit={handleSubmit}>
+              {mode === "signup" ? (
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  className="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition-all duration-200 ease-out placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  placeholder="Name"
+                  type="text"
+                />
+              ) : null}
+
               <input
                 value={email}
                 onChange={(event) => {
@@ -104,9 +134,20 @@ export default function Login() {
                 disabled={!email.trim() || !password.trim()}
                 className="flex h-12 w-full items-center justify-center rounded-2xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_16px_40px_-18px_rgba(15,23,42,0.85)] transition-all duration-200 ease-out hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                Login
+                {mode === "login" ? "Login" : "Sign Up"}
               </button>
             </form>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMode((current) => (current === "login" ? "signup" : "login"));
+                setError(null);
+              }}
+              className="mt-5 w-full text-center text-sm font-medium text-slate-600 transition hover:text-slate-950"
+            >
+              {mode === "login" ? "Need an account? Sign up" : "Already have an account? Log in"}
+            </button>
           </div>
         </div>
       </div>

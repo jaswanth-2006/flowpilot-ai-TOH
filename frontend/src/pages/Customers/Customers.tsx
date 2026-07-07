@@ -16,6 +16,7 @@ import { Button } from "../../components/ui/button";
 import {
   createCustomer,
   deleteCustomer,
+  getApiErrorMessage,
   getCustomers,
   type Customer,
   type CustomerInput,
@@ -108,7 +109,7 @@ export default function Customers() {
         }
       } catch (requestError) {
         if (mounted) {
-          setError("Failed to load customers. Please try again.");
+          setError(getApiErrorMessage(requestError, "Failed to load customers. Please try again."));
         }
       } finally {
         if (mounted) {
@@ -205,7 +206,7 @@ export default function Customers() {
       await refreshCustomers();
       closeDialog(true);
     } catch (requestError) {
-      setError("Unable to save the customer right now.");
+      setError(getApiErrorMessage(requestError, "Unable to save the customer right now."));
     } finally {
       setSubmitting(false);
     }
@@ -223,7 +224,7 @@ export default function Customers() {
       await refreshCustomers();
       setDeleteTarget(null);
     } catch (requestError) {
-      setError("Unable to delete the customer right now.");
+      setError(getApiErrorMessage(requestError, "Unable to delete the customer right now."));
     } finally {
       setSubmitting(false);
     }

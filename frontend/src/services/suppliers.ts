@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getApiErrorMessage } from "./apiError";
 
 export type Supplier = {
   id?: string;
@@ -48,3 +49,5 @@ export async function deleteSupplier(supplierId: string) {
   const response = await api.delete<{ message: string; data: Supplier[] }>(`/suppliers/${supplierId}`);
   return response.data;
 }
+
+export { getApiErrorMessage };

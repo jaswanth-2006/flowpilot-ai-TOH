@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getApiErrorMessage } from "./apiError";
 
 export type StepStatus = "pending" | "running" | "completed" | "failed";
 export type PlanStatus = "pending" | "running" | "completed" | "failed";
@@ -147,3 +148,5 @@ export async function updateFinalRecommendation(planId: string, payload: Recomme
   const response = await api.patch<ExecutionPlanResponse>(`/execution-engine/plans/${planId}/recommendation`, payload);
   return response.data;
 }
+
+export { getApiErrorMessage };

@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getApiErrorMessage } from "./apiError";
 
 export type Product = {
   id?: string;
@@ -73,3 +74,5 @@ export async function getSuppliers() {
 
   return data.data ?? [];
 }
+
+export { getApiErrorMessage };

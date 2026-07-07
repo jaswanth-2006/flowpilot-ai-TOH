@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 
 from app.schemas.supplier import SupplierCreate, SupplierUpdate
 from app.services.supplier_service import (
@@ -20,7 +20,7 @@ def get_suppliers():
     return list_suppliers()
 
 
-@router.post("/")
+@router.post("/", status_code=status.HTTP_201_CREATED)
 def create_supplier(supplier: SupplierCreate):
     return create_supplier_service(supplier)
 

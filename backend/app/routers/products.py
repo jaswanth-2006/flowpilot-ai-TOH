@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 
 from app.schemas.product import ProductCreate, ProductUpdate
 from app.services.product_service import (
@@ -21,7 +21,7 @@ def get_products():
     return list_products()
 
 
-@router.post("/")
+@router.post("/", status_code=status.HTTP_201_CREATED)
 def create_product(product: ProductCreate):
     return create_product_service(product)
 

@@ -20,7 +20,7 @@ router = APIRouter(
 )
 
 
-@router.post("/plans")
+@router.post("/plans", status_code=status.HTTP_201_CREATED)
 async def submit_enquiry(enquiry_payload: ExecutionEnquiryCreate):
     try:
         record = create_execution_plan(enquiry_payload)

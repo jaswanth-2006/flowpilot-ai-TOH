@@ -17,6 +17,7 @@ import { Button } from "../../components/ui/button";
 import {
   createProduct,
   deleteProduct,
+  getApiErrorMessage,
   getProducts,
   getSuppliers,
   updateProduct,
@@ -131,9 +132,9 @@ export default function Products() {
         if (mounted) {
           setProducts(data);
         }
-      } catch {
+      } catch (requestError) {
         if (mounted) {
-          setError("Failed to load products. Please try again.");
+          setError(getApiErrorMessage(requestError, "Failed to load products. Please try again."));
         }
       } finally {
         if (mounted) {
@@ -150,9 +151,10 @@ export default function Products() {
         if (mounted) {
           setSuppliers(data);
         }
-      } catch {
+      } catch (requestError) {
         if (mounted) {
           setSuppliers([]);
+          setError(getApiErrorMessage(requestError, "Failed to load suppliers for product mapping."));
         }
       } finally {
         if (mounted) {
@@ -256,8 +258,8 @@ export default function Products() {
 
       await refreshProducts();
       closeDialog(true);
-    } catch {
-      setError("Unable to save the product right now.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to save the product right now."));
     } finally {
       setSubmitting(false);
     }
@@ -274,8 +276,8 @@ export default function Products() {
       await deleteProduct(deleteTarget.id);
       await refreshProducts();
       setDeleteTarget(null);
-    } catch {
-      setError("Unable to delete the product right now.");
+    } catch (requestError) {
+      setError(getApiErrorMessage(requestError, "Unable to delete the product right now."));
     } finally {
       setSubmitting(false);
     }
